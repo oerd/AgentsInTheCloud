@@ -1,0 +1,7 @@
+{
+  "status": "partially-authenticated",
+  "isAuthenticated": false,
+  "hasAccessToken": true,
+  "hasRefreshToken": false,
+  "message": "Partially authenticated (missing refresh token)"
+}
