@@ -15,6 +15,7 @@ import { destructiveConfirmationHtml } from "@agents-in-the-cloud/design-system/
 import { dialogHtml } from "@agents-in-the-cloud/design-system/dialog";
 import { agentsInTheCloudBrandIconHtml, Icons } from "@agents-in-the-cloud/design-system/icons";
 import { warningBannerHtml } from "@agents-in-the-cloud/design-system/warning-banner";
+import { CodexPasteError, CodexSubscription, codexProviderId } from "./codex-subscription.ts";
 import {
   connectModelProviderApiKey,
   ProviderCatalogueRefreshError,
@@ -25,6 +26,7 @@ import {
   hasAvailableEnabledModel,
   seedProviderEnabledModels,
   loginPiOAuthProvider,
+  saveCodexSubscription,
   setCustomModelsJson,
   setEnabledModels,
   type PiAuthPrompt,
@@ -413,6 +415,7 @@ type PendingOAuthFlow = {
   revision: number;
   status: "pending" | "complete" | "error";
   abort: AbortController;
+  settled: Promise<void>;
   authUrl?: string;
   instructions?: string;
   userCode?: string;
@@ -435,9 +438,9 @@ async function startOAuthFlow(provider: ProviderChoice, host: ModelsHost): Promi
     previous.prompt = undefined;
     previous.abort.abort();
   }
-  const flow: PendingOAuthFlow = { id: crypto.randomUUID(), provider: provider.provider, label: provider.label, host, revision: 0, status: "pending", abort: new AbortController() };
+  const flow: PendingOAuthFlow = { id: crypto.randomUUID(), provider: provider.provider, label: provider.label, host, revision: 0, status: "pending", abort: new AbortController(), settled: Promise.resolve() };
   pendingOAuthFlows.set(flow.id, flow);
-  void loginPiOAuthProvider(provider.provider, {
+  flow.settled = loginPiOAuthProvider(provider.provider, {
     signal: flow.abort.signal,
     notify: (event) => {
       if (event.type === "auth_url") { flow.revision++; flow.authUrl = event.url; flow.instructions = event.instructions; }
@@ -573,7 +576,84 @@ function oauthCompleteBody(flow: PendingOAuthFlow): string {
   return `<div class="settings-oauth-card">${oauthStatus("done", `${flow.label} connected`, "Pick the models you want below.")}</div>`;
 }
 
-function renderOAuthConnectionStep(flow: PendingOAuthFlow): string {
+function codexDeviceContents(flow: PendingOAuthFlow): string {
+  if (flow.status === "error") return `<p class="settings-error">${escapeHtml(flow.error ?? "OAuth login failed")}</p>`;
+  if (flow.verificationUri) return oauthDeviceCodeBody(flow);
+  return `<div class="settings-oauth-card">${oauthStatus("pending", "Starting OAuth flow", "Waiting for the provider to respond.")}</div>`;
+}
+
+function oauthFlowControllerAttributes(flow: PendingOAuthFlow, pollMs: number): string {
+  const active = flow.status === "pending" && !(flow.prompt && !flow.authUrl && !flow.verificationUri);
+  return `data-controller="oauth-flow" data-oauth-flow-status-url-value="${oauthFlowPath(flow, "status")}?revision=${flow.revision}" data-oauth-flow-active-value="${active}" data-oauth-flow-poll-ms-value="${pollMs}"`;
+}
+
+function codexDeviceFrame(flow: PendingOAuthFlow, pollMs: number): string {
+  const polling = flow.status === "pending" ? ` ${oauthFlowControllerAttributes(flow, pollMs)}` : "";
+  return `<div id="${domId("models_codex_device", flow.host)}"${polling}>${codexDeviceContents(flow)}</div>`;
+}
+
+function codexCredentialForm(host: ModelsHost): string {
+  return `<form class="form-stack" method="post" action="/models/providers/openai-codex/credential?${hostQuery(host)}" data-turbo="true">
+    <label>ChatGPT sign-in JSON
+      <textarea class="textarea" name="credential" required spellcheck="false" autocomplete="off" data-1p-ignore rows="8"></textarea>
+    </label>
+    <p>Paste a finished ChatGPT sign-in. Saving replaces the ChatGPT sign-in stored on this machine.</p>
+    ${buttonHtml({ type: "submit", variant: "secondary", content: { kind: "caption", caption: "Save sign-in" } })}
+  </form>`;
+}
+
+function codexFlow(host: ModelsHost): PendingOAuthFlow | undefined {
+  let fallback: PendingOAuthFlow | undefined;
+  for (const flow of pendingOAuthFlows.values()) {
+    if (flow.provider !== codexProviderId || flow.host !== host) continue;
+    if (flow.status === "pending") return flow;
+    fallback = flow;
+  }
+  return fallback;
+}
+
+function renderCodexPasteFallback(host: ModelsHost, error: string): string {
+  return renderConnectionStep({ provider: codexProviderId, label: providerLabel({ id: codexProviderId }) }, host, {
+    bodyHtml: `<p class="settings-error" role="alert">${escapeHtml(error)}</p>${codexCredentialForm(host)}`,
+    actionsHtml: backToChoices(host),
+  });
+}
+
+async function cancelCodexLogins(): Promise<void> {
+  const settling: Promise<void>[] = [];
+  for (const flow of [...pendingOAuthFlows.values()]) {
+    if (flow.provider !== codexProviderId || flow.status !== "pending") continue;
+    flow.abort.abort();
+    flow.prompt = undefined;
+    pendingOAuthFlows.delete(flow.id);
+    settling.push(flow.settled);
+  }
+  await Promise.all(settling);
+}
+
+async function handleCodexCredential(request: Request, host: ModelsHost, renderPickerUpdates: () => Promise<string>): Promise<Response> {
+  const pasted = String((await request.formData()).get("credential") ?? "");
+  let subscription: CodexSubscription;
+  try {
+    subscription = CodexSubscription.parse(pasted);
+  } catch (error) {
+    if (!(error instanceof CodexPasteError)) throw error;
+    const flow = codexFlow(host);
+    const html = flow ? renderOAuthConnectionStep(flow, error.message) : renderCodexPasteFallback(host, error.message);
+    return stream(replace(ids.connect(host), html));
+  }
+  await cancelCodexLogins();
+  try {
+    await saveCodexSubscription(subscription);
+    await seedProviderEnabledModels(codexProviderId);
+  } catch (error) {
+    if (error instanceof ProviderCatalogueRefreshError) return panelResponse(host, renderPickerUpdates, { focus: codexProviderId, error: error.message });
+    throw error;
+  }
+  return panelResponse(host, renderPickerUpdates, { focus: codexProviderId });
+}
+
+function renderOAuthConnectionStep(flow: PendingOAuthFlow, pasteError = ""): string {
   const pollMs = Math.max(1500, Math.min(15000, (flow.intervalSeconds ?? 3) * 1000));
   const doneButton = buttonHtml({ type: "submit", variant: "primary", content: { kind: "caption", caption: "Done" } });
   const backButton = buttonHtml({ type: "submit", variant: "secondary", content: { kind: "caption", caption: "Back" } });
@@ -599,10 +679,13 @@ function renderOAuthConnectionStep(flow: PendingOAuthFlow): string {
     : flow.status === "pending"
       ? `<form method="post" action="${oauthFlowPath(flow, "cancel")}" data-turbo="true">${backButton}</form>${flow.prompt ? submitUrlButton : ""}`
       : `<form method="post" action="${oauthFlowPath(flow, "finish")}" data-turbo="true">${backButton}</form>`;
+  const paste = pasteError ? `<p class="settings-error" role="alert">${escapeHtml(pasteError)}</p>` : "";
+  const codexPaste = flow.provider === codexProviderId && flow.status !== "complete";
+  const shown = codexPaste ? `${codexDeviceFrame(flow, pollMs)}${paste}${codexCredentialForm(flow.host)}` : `${paste}${body}`;
   return renderConnectionStep(flow, flow.host, {
-    bodyHtml: `${flow.status !== "complete" ? openAISignInNotice(flow.provider) : ""}${body}`,
+    bodyHtml: `${flow.status !== "complete" ? openAISignInNotice(flow.provider) : ""}${shown}`,
     actionsHtml: action,
-    attributesHtml: `data-controller="oauth-flow" data-oauth-flow-status-url-value="${oauthFlowPath(flow, "status")}?revision=${flow.revision}" data-oauth-flow-active-value="${flow.status === "pending" && !(flow.prompt && !flow.authUrl && !flow.verificationUri)}" data-oauth-flow-poll-ms-value="${pollMs}"`,
+    attributesHtml: codexPaste ? undefined : oauthFlowControllerAttributes(flow, pollMs),
   });
 }
 
@@ -697,6 +780,9 @@ export async function handleModelsRequest(request: Request, url: URL, renderPick
   if (["/models/enabled-models/enable", "/models/enabled-models/disable"].includes(url.pathname) && request.method === "POST") {
     return await handleEnabledModelsAction(request, url.pathname.endsWith("/enable"), renderPickerUpdates);
   }
+  if (url.pathname === "/models/providers/openai-codex/credential" && request.method === "POST") {
+    return handleCodexCredential(request, host, renderPickerUpdates);
+  }
   let match = url.pathname.match(/^\/models\/providers\/([^/]+)\/connect$/);
   if (match && request.method === "POST") {
     const provider = decodeURIComponent(match[1]!);
@@ -739,6 +825,11 @@ export async function handleModelsRequest(request: Request, url: URL, renderPick
       flow.abort.abort();
       pendingOAuthFlows.delete(flowId);
       return panelResponse(flow.host, renderPickerUpdates);
+    }
+    if (action === "status" && flow.provider === codexProviderId) {
+      if (flow.status === "pending" && url.searchParams.get("revision") === String(flow.revision)) return stream("");
+      const pollMs = Math.max(1500, Math.min(15000, (flow.intervalSeconds ?? 3) * 1000));
+      return stream(replace(domId("models_codex_device", flow.host), codexDeviceFrame(flow, pollMs)));
     }
     if (action === "status" && flow.status === "pending" && url.searchParams.get("revision") === String(flow.revision)) return stream("");
     return stream(replace(ids.connect(flow.host), renderOAuthConnectionStep(flow)));
