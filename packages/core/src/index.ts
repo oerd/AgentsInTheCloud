@@ -60,6 +60,7 @@ export {
 } from "./cloud-forges.ts";
 
 export {
+  bitbucketAccountFileIsUnreadable,
   clearForgeAccount,
   clearForgeAccounts,
   discoverForgeAccount,

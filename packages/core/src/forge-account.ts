@@ -40,22 +40,27 @@ function workspaceFile(name: string): string {
   return join(getAgentsInTheCloudRuntimeContext().agentsInTheCloudDataDir, "workspace", name);
 }
 
-function readStoredBitbucketAccount(raw: string): ForgeAccount {
-  const parsed: unknown = JSON.parse(raw);
-  if (!Value.Check(bitbucketAccountFileSchema, parsed)) throw invalidArguments("Bitbucket account file is invalid.");
+function readStoredBitbucketAccount(raw: string): ForgeAccount | undefined {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (error) {
+    if (error instanceof SyntaxError) return undefined;
+    throw error;
+  }
+  if (!Value.Check(bitbucketAccountFileSchema, parsed)) return undefined;
   const email = parseAtlassianAccountEmail(parsed.email);
   const token = parseBitbucketToken(parsed.token);
-  if (!email || !token) throw invalidArguments("Bitbucket account file is invalid.");
+  if (!email || !token) return undefined;
   return { forge: "bitbucket", email, token };
 }
 
-function bitbucketAccountFromEnv(): ForgeAccount | undefined {
-  const forge = cloudForge("bitbucket");
-  if (forge.id !== "bitbucket") throw new Error(`Unknown forge ${forge.id}`);
-  const token = parseBitbucketToken(process.env[forge.hostFallbackTokenEnv] ?? "");
-  const email = parseAtlassianAccountEmail(process.env[forge.hostFallbackEmailEnv] ?? "");
-  if (!token || !email) return undefined;
-  return { forge: "bitbucket", email, token };
+export function bitbucketAccountFileIsUnreadable(): boolean {
+  const path = workspaceFile(cloudForge("bitbucket").storeFile);
+  if (!existsSync(path)) return false;
+  const raw = readFileSync(path, "utf8");
+  if (!raw.trim()) return false;
+  return readStoredBitbucketAccount(raw) === undefined;
 }
 
 export function discoverForgeAccount(forgeId: ForgeId): ForgeAccount | undefined {
@@ -73,7 +78,7 @@ export function discoverForgeAccount(forgeId: ForgeId): ForgeAccount | undefined
     const token = process.env[forge.hostFallbackEnv]?.trim();
     return token ? { forge: "github", token } : undefined;
   }
-  return bitbucketAccountFromEnv();
+  return undefined;
 }
 
 export function discoverForgeAccounts(): readonly ForgeAccount[] {

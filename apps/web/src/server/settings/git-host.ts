@@ -1,5 +1,6 @@
 import { buttonHtml } from "@agents-in-the-cloud/design-system/button";
 import { destructiveConfirmationHtml } from "@agents-in-the-cloud/design-system/destructive-confirmation";
+import { bitbucketAccountFileIsUnreadable } from "@agents-in-the-cloud/core";
 import { cloudForge, cloudForges, type ForgeId } from "@agents-in-the-cloud/core/cloud-forges";
 import { clearForgeAccount, hasForgeAccount, setForgeAccount } from "@agents-in-the-cloud/proxy-egress";
 import { getStoredCommitIdentity, setCommitIdentity } from "@agents-in-the-cloud/workspace-templates";
@@ -71,9 +72,7 @@ gh auth token</pre>
 function bitbucketConnectionForm(surface: SettingsSurface, error: string): string {
   const connectButton = renderForgeConnectButton("bitbucket", surface);
   return `<form id="${domId(surface, "bitbucket-connect-form")}" class="git-host-connect-form git-host-connect-form--row form-stack" method="post" action="${forgeAction("bitbucket", surface, "connect")}" data-turbo="true">
-    <p>Create an API token with Bitbucket scopes on your Atlassian account. Then run this on your own computer:</p>
-    <pre class="settings-command">${escapeHtml("bkt auth login https://bitbucket.org --kind cloud --username you@example.com --token <api-token>")}</pre>
-    <p>Paste that email and token here. The token stays outside Agent sandboxes, so Agents can use your Bitbucket repositories without seeing it.</p>
+    <p>Create an <a href="https://id.atlassian.com/manage-profile/security/api-tokens" target="_blank" rel="noreferrer">API token</a> with repository read. Paste your Atlassian account email and the token here. The token stays outside Agent sandboxes, so Agents can use your Bitbucket repositories without seeing it.</p>
     ${error ? `<p class="settings-error">${escapeHtml(error)}</p>` : ""}
     <input class="settings-input text-field" type="email" name="email" placeholder="Atlassian email" aria-label="Atlassian email" autocomplete="off" data-1p-ignore required>
     <div class="git-host-connect-controls"><input class="settings-input text-field" type="password" data-1p-ignore name="token" placeholder="API token" aria-label="API token" autocomplete="off" required>${connectButton}</div>
@@ -95,6 +94,7 @@ function connectionForm(forge: ForgeId, surface: SettingsSurface, error: string)
 
 export function renderForgeConnection(forge: ForgeId, surface: SettingsSurface = "settings", error = ""): string {
   const connected = hasForgeAccount(forge);
+  const unreadable = forge === "bitbucket" && bitbucketAccountFileIsUnreadable();
   const id = domId(surface, "provider", forge);
   const label = cloudForge(forge).label;
   if (forge === "github" && surface === "onboarding" && !connected) return `<div class="git-host-connection" id="${id}">${connectionForm(forge, surface, error)}</div>`;
@@ -105,10 +105,14 @@ export function renderForgeConnection(forge: ForgeId, surface: SettingsSurface =
     confirmCaption: `Disconnect ${label}`,
     cancelCaption: "Cancel",
   });
+  const showDisconnect = connected || unreadable;
+  const body = unreadable
+    ? `<p class="settings-error">${escapeHtml("The saved Bitbucket account can't be read. Disconnect it and connect again.")}</p>`
+    : showDisconnect ? "" : connectionForm(forge, surface, error);
   return `<div class="git-host-connection" id="${id}"><div class="managed-list" data-controller="managed-list"><div class="managed-list__item">
     ${providerBadgeHtml(forge, label, "settings-provider-icon managed-list__visual")}
-    <div class="managed-list__content"><div class="managed-list__label"><span class="managed-list__label-text">${escapeHtml(label)}</span></div>${connected ? "" : connectionForm(forge, surface, error)}</div>
-    ${connected ? `<div class="managed-list__actions"><form method="post" action="${disconnectAction}" data-turbo="true">${confirmation}</form></div>` : ""}
+    <div class="managed-list__content"><div class="managed-list__label"><span class="managed-list__label-text">${escapeHtml(label)}</span></div>${body}</div>
+    ${showDisconnect ? `<div class="managed-list__actions"><form method="post" action="${disconnectAction}" data-turbo="true">${confirmation}</form></div>` : ""}
   </div></div></div>`;
 }
 

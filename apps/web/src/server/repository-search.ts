@@ -3,8 +3,8 @@ import { contentRowHtml } from "@agents-in-the-cloud/design-system/content-row";
 import { autocompleteHtml } from "@agents-in-the-cloud/design-system/autocomplete";
 import { discoverForgeAccounts, type ForgeAccount, type ForgeId } from "@agents-in-the-cloud/core";
 import { escapeHtml } from "@agents-in-the-cloud/shared";
-import { Type } from "typebox";
-import { Value } from "typebox/value";
+import { Type, type Static, type TSchema } from "typebox";
+import { ParseError, Value } from "typebox/value";
 
 export interface RepositoryHit {
   readonly forge: ForgeId;
@@ -20,6 +20,7 @@ export interface RepositorySearchGroup {
   readonly heading: string;
   readonly repositories: readonly RepositoryHit[];
   readonly notice?: string;
+  readonly attempted: boolean;
   readonly rateLimit?: { readonly retryAfterSeconds?: number };
 }
 
@@ -63,7 +64,7 @@ class RepositorySearchRejectedError extends Error {}
 
 type PageOutcome =
   | { kind: "hits"; repositories: RepositoryHit[] }
-  | { kind: "notice"; notice: string; rateLimit?: { retryAfterSeconds?: number } };
+  | { kind: "notice"; notice: string; attempted: boolean; rateLimit?: { retryAfterSeconds?: number } };
 
 const pageCache = new Map<string, { expiresAt: number; outcome: PageOutcome }>();
 const ownerCache = new Map<string, { expiresAt: number; owners: string[] }>();
@@ -104,9 +105,7 @@ function bitbucketCloneUrl(fullName: string, links: { clone?: { name?: string; h
   try {
     const url = new URL(href);
     if (url.protocol !== "https:") return fallback;
-    url.username = "";
-    url.password = "";
-    return url.toString();
+    return stripCloneUserinfo(url.toString());
   } catch {
     return fallback;
   }
@@ -164,7 +163,7 @@ async function searchGitHubRepositoryPage(query: string, token: string | undefin
   url.searchParams.set("q", query);
   url.searchParams.set("per_page", "25");
   const response = await fetchGitHub(url, token);
-  const body = Value.Parse(githubRepositorySearchResponseSchema, await response.json());
+  const body = await readSearchBody(response, githubRepositorySearchResponseSchema, "GitHub repository search returned an unreadable response.");
   return body.items.map((repo) => ({
     forge: "github",
     fullName: repo.full_name,
@@ -177,27 +176,44 @@ async function searchGitHubRepositoryPage(query: string, token: string | undefin
 
 function caughtPage(error: RepositorySearchRateLimitError | RepositorySearchRejectedError, rejectedNotice: string, rateLimitNotice: string): PageOutcome {
   if (error instanceof RepositorySearchRateLimitError) {
-    return { kind: "notice", notice: rateLimitNotice, rateLimit: { retryAfterSeconds: error.retryAfterSeconds } };
+    return { kind: "notice", notice: rateLimitNotice, attempted: true, rateLimit: { retryAfterSeconds: error.retryAfterSeconds } };
   }
-  return { kind: "notice", notice: rejectedNotice };
+  return { kind: "notice", notice: rejectedNotice, attempted: true };
+}
+
+async function readSearchBody<Schema extends TSchema>(response: Response, schema: Schema, message: string): Promise<Static<Schema>> {
+  let encoded: unknown;
+  try {
+    encoded = await response.json();
+  } catch (error) {
+    if (error instanceof SyntaxError) throw new RepositorySearchRejectedError(message);
+    throw error;
+  }
+  try {
+    return Value.Parse(schema, encoded);
+  } catch (error) {
+    if (error instanceof ParseError) throw new RepositorySearchRejectedError(message);
+    throw error;
+  }
 }
 
 async function githubPersonalPage(query: string, token: string | undefined): Promise<PageOutcome> {
   const key = pageCacheKey("github", credentialKey(token), query, "personal");
   const cached = cachedPage(key);
   if (cached) return cached;
-  if (!token) return remember(key, { kind: "notice", notice: "Connect GitHub to search your personal and organization repositories." });
+  if (!token) return remember(key, { kind: "notice", notice: "Connect GitHub to search your personal and organization repositories.", attempted: false });
   try {
     const owners = await repositoryOwners(token);
     const repositories = await searchGitHubRepositoryPage(`${query} ${owners.map((owner) => `user:${owner}`).join(" ")}`, token, true);
     return remember(key, { kind: "hits", repositories });
   } catch (error) {
+    if (error instanceof TypeError) return { kind: "notice", notice: "Your repositories could not be searched. Check your GitHub connection and organization access.", attempted: true };
     if (error instanceof RepositorySearchRateLimitError || error instanceof RepositorySearchRejectedError) {
-      return remember(key, caughtPage(
+      return caughtPage(
         error,
         "Your repositories could not be searched. Check your GitHub connection and organization access.",
         "Your repositories could not be searched: GitHub is rate limited. Try again shortly.",
-      ));
+      );
     }
     throw error;
   }
@@ -211,56 +227,59 @@ async function githubPublicPage(query: string, token: string | undefined): Promi
     const repositories = await searchGitHubRepositoryPage(`${query} is:public`, token, false);
     return remember(key, { kind: "hits", repositories });
   } catch (error) {
+    if (error instanceof TypeError) return { kind: "notice", notice: "Public repositories could not be searched. Check your GitHub connection.", attempted: true };
     if (error instanceof RepositorySearchRateLimitError || error instanceof RepositorySearchRejectedError) {
-      return remember(key, caughtPage(
+      return caughtPage(
         error,
         "Public repositories could not be searched. Check your GitHub connection.",
         "Public repositories could not be searched: GitHub is rate limited. Try again shortly.",
-      ));
+      );
     }
     throw error;
   }
 }
 
 async function bitbucketPersonalPage(query: string, account: Extract<ForgeAccount, { forge: "bitbucket" }>): Promise<PageOutcome> {
-  const credential = createHash("sha256").update(`${account.email}\0${account.token}`).digest("hex");
-  const key = pageCacheKey("bitbucket", credential, query, "personal");
+  const key = pageCacheKey("bitbucket", credentialKey(`${account.email}\0${account.token}`), query, "personal");
   const cached = cachedPage(key);
   if (cached) return cached;
+  const rejected = "Your Bitbucket repositories could not be searched. Check your Bitbucket connection.";
+  const limited = "Your Bitbucket repositories could not be searched: Bitbucket is rate limited. Try again shortly.";
+  const url = new URL("https://api.bitbucket.org/2.0/repositories");
+  url.searchParams.set("role", "member");
+  url.searchParams.set("pagelen", "25");
+  url.searchParams.set("q", bitbucketNameQuery(query));
+  let response: Response;
   try {
-    const url = new URL("https://api.bitbucket.org/2.0/repositories");
-    url.searchParams.set("role", "member");
-    url.searchParams.set("pagelen", "25");
-    url.searchParams.set("q", bitbucketNameQuery(query));
-    const response = await fetch(url, {
+    response = await fetch(url, {
       headers: {
         Accept: "application/json",
         Authorization: `Basic ${Buffer.from(`${account.email}:${account.token}`).toString("base64")}`,
       },
     });
-    if (response.status === 429) throw new RepositorySearchRateLimitError("Bitbucket repository search was rate limited.", retryAfterSeconds(response));
-    if (response.status === 401 || response.status === 403) throw new RepositorySearchRejectedError("Bitbucket rejected the account.");
-    if (!response.ok) throw new RepositorySearchRejectedError(`Bitbucket repository search failed: ${response.status}`);
-    const body = Value.Parse(bitbucketRepositorySearchResponseSchema, await response.json());
-    const repositories = body.values.map((repo) => ({
-      forge: "bitbucket" as const,
-      fullName: repo.full_name,
-      description: repo.description ?? null,
-      private: repo.is_private,
-      cloneUrl: bitbucketCloneUrl(repo.full_name, repo.links),
-      personal: true,
-    }));
-    return remember(key, { kind: "hits", repositories });
   } catch (error) {
-    if (error instanceof RepositorySearchRateLimitError || error instanceof RepositorySearchRejectedError) {
-      return remember(key, caughtPage(
-        error,
-        "Your Bitbucket repositories could not be searched. Check your Bitbucket connection.",
-        "Your Bitbucket repositories could not be searched: Bitbucket is rate limited. Try again shortly.",
-      ));
-    }
+    if (error instanceof TypeError) return { kind: "notice", notice: rejected, attempted: true };
     throw error;
   }
+  if (response.status === 429) return caughtPage(new RepositorySearchRateLimitError("Bitbucket repository search was rate limited.", retryAfterSeconds(response)), rejected, limited);
+  if (response.status === 401 || response.status === 403) return caughtPage(new RepositorySearchRejectedError("Bitbucket rejected the account."), rejected, limited);
+  if (!response.ok) return caughtPage(new RepositorySearchRejectedError(`Bitbucket repository search failed: ${response.status}`), rejected, limited);
+  let body: Static<typeof bitbucketRepositorySearchResponseSchema>;
+  try {
+    body = await readSearchBody(response, bitbucketRepositorySearchResponseSchema, "Bitbucket repository search returned an unreadable response.");
+  } catch (error) {
+    if (error instanceof RepositorySearchRejectedError) return caughtPage(error, rejected, limited);
+    throw error;
+  }
+  const repositories = body.values.map((repo) => ({
+    forge: "bitbucket" as const,
+    fullName: repo.full_name,
+    description: repo.description ?? null,
+    private: repo.is_private,
+    cloneUrl: bitbucketCloneUrl(repo.full_name, repo.links),
+    personal: true,
+  }));
+  return remember(key, { kind: "hits", repositories });
 }
 
 function deduped(personal: readonly RepositoryHit[], rest: readonly RepositoryHit[]) {
@@ -283,9 +302,9 @@ function deduped(personal: readonly RepositoryHit[], rest: readonly RepositoryHi
 function groupFrom(forge: ForgeId, heading: string, outcome: PageOutcome): RepositorySearchGroup | undefined {
   if (outcome.kind === "hits") {
     if (outcome.repositories.length === 0) return undefined;
-    return { forge, heading, repositories: outcome.repositories };
+    return { forge, heading, repositories: outcome.repositories, attempted: true };
   }
-  return { forge, heading, repositories: [], notice: outcome.notice, rateLimit: outcome.rateLimit };
+  return { forge, heading, repositories: [], notice: outcome.notice, attempted: outcome.attempted, rateLimit: outcome.rateLimit };
 }
 
 export async function searchRepositories(query: string): Promise<RepositorySearchResults> {
@@ -311,9 +330,10 @@ export async function searchRepositories(query: string): Promise<RepositorySearc
 }
 
 export function repositorySearchIsRateLimited(results: RepositorySearchResults): { retryAfterSeconds?: number } | undefined {
-  if (results.groups.length === 0) return undefined;
-  if (results.groups.some((group) => group.repositories.length > 0 || !group.rateLimit)) return undefined;
-  const waits = results.groups.flatMap((group) => group.rateLimit?.retryAfterSeconds === undefined ? [] : [group.rateLimit.retryAfterSeconds]);
+  const attempted = results.groups.filter((group) => group.attempted);
+  if (attempted.length === 0) return undefined;
+  if (attempted.some((group) => group.repositories.length > 0 || !group.rateLimit)) return undefined;
+  const waits = attempted.flatMap((group) => group.rateLimit?.retryAfterSeconds === undefined ? [] : [group.rateLimit.retryAfterSeconds]);
   return waits.length > 0 ? { retryAfterSeconds: Math.max(...waits) } : {};
 }
 

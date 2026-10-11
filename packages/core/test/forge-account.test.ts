@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { forgeCredentialHelperShellBody } from "../src/cloud-forges.ts";
 import {
+  bitbucketAccountFileIsUnreadable,
   clearForgeAccount,
   discoverForgeAccount,
   discoverForgeAccounts,
@@ -159,16 +160,15 @@ describe("forge accounts", () => {
     expect(discoverForgeAccount("bitbucket")).toBeUndefined();
   });
 
-  test("a blank Bitbucket account file falls through to the environment pair", () => {
+  test("a blank Bitbucket account file is not an account", () => {
     const path = join(dataDir, "workspace", "bitbucket-account");
     mkdirSync(dirname(path), { recursive: true });
     writeFileSync(path, "\n");
     process.env.BKT_TOKEN = " env-token ";
     process.env.BKT_USERNAME = " ada@example.com ";
 
-    const email = parseAtlassianAccountEmail("ada@example.com");
-    if (!email) throw new Error("Atlassian email did not parse");
-    expect(discoverForgeAccount("bitbucket")).toEqual({ forge: "bitbucket", email, token: "env-token" });
+    expect(discoverForgeAccount("bitbucket")).toBeUndefined();
+    expect(bitbucketAccountFileIsUnreadable()).toBe(false);
   });
 
   test("a corrupt Bitbucket account file leaves GitHub discovery working", () => {
@@ -180,6 +180,7 @@ describe("forge accounts", () => {
     expect(discoverForgeAccount("github")).toEqual({ forge: "github", token: "gh-token" });
     expect(discoverForgeAccounts().map((account) => account.forge)).toEqual(["github"]);
     expect(discoverForgeAccount("bitbucket")).toBeUndefined();
+    expect(bitbucketAccountFileIsUnreadable()).toBe(true);
   });
 
   test("Bitbucket does not take an account from BKT_TOKEN and BKT_USERNAME", () => {
@@ -190,20 +191,22 @@ describe("forge accounts", () => {
     expect(hasForgeAccount("bitbucket")).toBe(false);
   });
 
-  test("malformed Bitbucket JSON throws", () => {
+  test("malformed Bitbucket JSON is not an account", () => {
     const path = join(dataDir, "workspace", "bitbucket-account");
     mkdirSync(dirname(path), { recursive: true });
     writeFileSync(path, "{");
 
-    expect(() => discoverForgeAccount("bitbucket")).toThrow(SyntaxError);
+    expect(discoverForgeAccount("bitbucket")).toBeUndefined();
+    expect(bitbucketAccountFileIsUnreadable()).toBe(true);
   });
 
-  test("a Bitbucket account file that fails the schema throws", () => {
+  test("a Bitbucket account file that fails the schema is not an account", () => {
     const path = join(dataDir, "workspace", "bitbucket-account");
     mkdirSync(dirname(path), { recursive: true });
     writeFileSync(path, `${JSON.stringify({ email: "ada@example.com", token: "tok", extra: true })}\n`);
 
-    expect(() => discoverForgeAccount("bitbucket")).toThrow("Bitbucket account file is invalid.");
+    expect(discoverForgeAccount("bitbucket")).toBeUndefined();
+    expect(bitbucketAccountFileIsUnreadable()).toBe(true);
   });
 
   test("refuses an empty GitHub token and an invalid Bitbucket account", () => {

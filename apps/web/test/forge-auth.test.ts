@@ -3,7 +3,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { parseAtlassianAccountEmail } from "@agents-in-the-cloud/core";
+import { parseAtlassianAccountEmail, setForgeAccount } from "@agents-in-the-cloud/core";
 import { validateForgeAccount } from "../src/server/forge-auth.ts";
 import { renderForgeSection } from "../src/server/settings/git-host.ts";
 import { createWorkspaceTemplateRoutes } from "../src/server/workspace-template-routes.ts";
@@ -106,8 +106,10 @@ describe("forge auth", () => {
     let auth = "";
     globalThis.fetch = fetchStub((url, init) => {
       auth = new Headers(init?.headers).get("authorization") ?? "";
-      if (url === "https://api.bitbucket.org/2.0/user") return Promise.resolve(Response.json({ display_name: "Ada Lovelace", username: "ada" }));
-      throw new Error(`unexpected fetch ${String(url)}`);
+      const href = String(url);
+      if (href.startsWith("https://api.bitbucket.org/2.0/repositories")) return Promise.resolve(Response.json({ values: [] }));
+      if (href === "https://api.bitbucket.org/2.0/user") return Promise.resolve(Response.json({ display_name: "Ada Lovelace", username: "ada" }));
+      throw new Error(`unexpected fetch ${href}`);
     });
 
     const email = parseAtlassianAccountEmail("ada@example.com");
@@ -161,13 +163,17 @@ describe("forge auth", () => {
     });
   });
 
-  test("rejects malformed Bitbucket user responses", async () => {
-    globalThis.fetch = fetchStub(() => Promise.resolve(Response.json({ display_name: 12 })));
-
-    expect(await validateForgeAccount({ forge: "bitbucket", email: "ada@example.com", token: "api-token" })).toEqual({
-      ok: false,
-      message: "Bitbucket returned an invalid user response. Try again.",
+  test("a malformed Bitbucket profile falls back to the email local part", async () => {
+    globalThis.fetch = fetchStub((url) => {
+      if (String(url).startsWith("https://api.bitbucket.org/2.0/repositories")) return Promise.resolve(Response.json({ values: [] }));
+      return Promise.resolve(Response.json({ display_name: 12 }));
     });
+
+    const result = await validateForgeAccount({ forge: "bitbucket", email: "ada@example.com", token: "api-token" });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.commitName).toBe("ada");
+    expect(result.commitEmail).toBe("ada@example.com");
   });
 
   test("an unreadable Bitbucket account file still offers Disconnect", async () => {
@@ -208,6 +214,15 @@ describe("forge auth", () => {
       }).editorHtml({ kind: "new" });
       expect(html).toContain("Connect Bitbucket in Settings to search it too.");
       expect(html).not.toContain("search GitHub and Bitbucket");
+      const email = parseAtlassianAccountEmail("ada@example.com");
+      if (!email) throw new Error("Atlassian email did not parse");
+      setForgeAccount({ forge: "bitbucket", email, token: "api-token" });
+      const connected = await createWorkspaceTemplateRoutes({
+        referencingWorkspaces: () => [],
+        invalidatePresentation: () => {},
+        createAgentWorkspace: () => Promise.resolve(new Response()),
+      }).editorHtml({ kind: "new" });
+      expect(connected).toContain("search GitHub and Bitbucket.");
     } finally {
       if (previous === undefined) delete process.env.ATELIER_DATA_DIR;
       else process.env.ATELIER_DATA_DIR = previous;

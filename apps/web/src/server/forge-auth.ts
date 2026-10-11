@@ -93,14 +93,18 @@ async function validateBitbucketAccount(emailInput: string, tokenInput: string):
   const email = parseAtlassianAccountEmail(emailInput);
   if (!email) return { ok: false, message: "Use the Atlassian account email for that token." };
 
+  const headers = {
+    accept: "application/json",
+    authorization: `Basic ${Buffer.from(`${email}:${token}`).toString("base64")}`,
+  };
+  const localPart = email.split("@")[0] ?? email;
+  const repositories = new URL("https://api.bitbucket.org/2.0/repositories");
+  repositories.searchParams.set("role", "member");
+  repositories.searchParams.set("pagelen", "1");
+
   let response: Response;
   try {
-    response = await fetch("https://api.bitbucket.org/2.0/user", {
-      headers: {
-        accept: "application/json",
-        authorization: `Basic ${Buffer.from(`${email}:${token}`).toString("base64")}`,
-      },
-    });
+    response = await fetch(repositories, { headers });
   } catch {
     return { ok: false, message: "Could not reach Bitbucket. Check your network and try again." };
   }
@@ -108,10 +112,16 @@ async function validateBitbucketAccount(emailInput: string, tokenInput: string):
   if (response.status === 401 || response.status === 403) return { ok: false, message: "Bitbucket rejected that email and token. Check that the token is active and can read repositories." };
   if (!response.ok) return { ok: false, message: `Bitbucket token validation failed (${response.status}). Try again.` };
 
-  const body = await decodeJsonResponse(response, bitbucketUserResponseSchema);
-  if (!body) return { ok: false, message: "Bitbucket returned an invalid user response. Try again." };
-  const localPart = email.split("@")[0] ?? email;
-  const commitName = optionalTrimmed(body.display_name) ?? optionalTrimmed(body.username) ?? localPart;
+  let commitName = localPart;
+  try {
+    const profile = await fetch("https://api.bitbucket.org/2.0/user", { headers });
+    if (profile.ok) {
+      const body = await decodeJsonResponse(profile, bitbucketUserResponseSchema);
+      commitName = optionalTrimmed(body?.display_name) ?? optionalTrimmed(body?.username) ?? localPart;
+    }
+  } catch {
+    commitName = localPart;
+  }
   return { ok: true, account: { forge: "bitbucket", email, token }, commitName, commitEmail: email };
 }
 
