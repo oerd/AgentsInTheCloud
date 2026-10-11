@@ -22,13 +22,13 @@ test("builtin is the initial default and successful choices persist", async () =
   expect((await defaultAgentType()).id).toBe("builtin");
   await rememberAgentType("codex");
   expect(JSON.parse(await Bun.file(join(directory, "default-agent-type.json")).text())).toBe("codex");
-  expect((await orderedAgentTypes()).map(({ id }) => id)).toEqual(["codex", "builtin", "claude", "codex-cli", "pi"]);
+  expect((await orderedAgentTypes()).map(({ id }) => id)).toEqual(["codex", "builtin", "claude", "codex-cli", "cursor", "pi"]);
   await rememberAgentType("claude");
   expect((await defaultAgentType()).id).toBe("claude");
-  expect((await orderedAgentTypes()).map(({ id }) => id)).toEqual(["claude", "builtin", "codex", "codex-cli", "pi"]);
+  expect((await orderedAgentTypes()).map(({ id }) => id)).toEqual(["claude", "builtin", "codex", "codex-cli", "cursor", "pi"]);
   await rememberAgentType("pi");
   expect((await defaultAgentType()).id).toBe("pi");
-  expect((await orderedAgentTypes()).map(({ id }) => id)).toEqual(["pi", "builtin", "claude", "codex", "codex-cli"]);
+  expect((await orderedAgentTypes()).map(({ id }) => id)).toEqual(["pi", "builtin", "claude", "codex", "codex-cli", "cursor"]);
   await rememberAgentType("codex-cli");
   expect((await defaultAgentType()).id).toBe("codex-cli");
   await rememberAgentType("builtin");
@@ -94,6 +94,13 @@ test("previous Agent type preference remains readable and new choices use the re
   expect((await defaultAgentType()).id).toBe("codex");
 });
 
+
+test("Cursor resolves to the CLI adapter", async () => {
+  const { agentsInTheCloudServerModule: cursor } = await import("@agents-in-the-cloud/cursor-agent/server");
+  expect(getAgentType("cursor")).toBe(cursor.agentType!);
+  expect(cursor.id).toBe("cursor-agent");
+  expect(cursor.agentType?.label).toBe("Cursor");
+});
 
 test("Codex and Codex CLI resolve to distinct implementations without old aliases", async () => {
   const { agentsInTheCloudServerModule: codex } = await import("@agents-in-the-cloud/codex-agent/server");

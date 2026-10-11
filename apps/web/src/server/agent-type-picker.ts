@@ -3,7 +3,7 @@ import { escapeHtml, providerBrandIconHtml } from "@agents-in-the-cloud/shared";
 
 interface AgentTypeChoice { id: string; label: string; iconHtml: string }
 
-const agentOrder = ["builtin", "pi", "claude", "codex", "codex-cli"];
+const agentOrder = ["builtin", "pi", "claude", "cursor", "codex", "codex-cli"];
 const flexibleSubscriptions = [
   { provider: "openai", label: "ChatGPT" },
   { provider: "github-copilot", label: "GitHub Copilot" },
@@ -16,6 +16,7 @@ const descriptions = new Map<string, AgentDescription>([
   ["builtin", { what: "Lucas' favorite! Pi Durable + Best Visualizations", models: "All", subscriptions: flexibleSubscriptions }],
   ["pi", { what: "Original Pi CLI", models: "All", subscriptions: flexibleSubscriptions }],
   ["claude", { what: "Original Claude Code CLI", models: "Anthropic", subscriptions: [{ provider: "anthropic", label: "Claude" }] }],
+  ["cursor", { what: "Original Cursor CLI", models: "Cursor", subscriptions: [{ provider: "cursor", label: "Cursor" }] }],
   ["codex", { what: "Codex harness with HTML composer and transcript", models: "OpenAI", subscriptions: openAISubscription }],
   ["codex-cli", { what: "Original Codex CLI", models: "OpenAI", subscriptions: openAISubscription }],
 ]);
