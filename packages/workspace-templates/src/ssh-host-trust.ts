@@ -2,7 +2,8 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { invalidArguments, runCommand, shellQuote, writeFileAtomic } from "@agents-in-the-cloud/core";
-import { gitHubKnownHosts } from "./github-host-keys.ts";
+import { cloudForges } from "@agents-in-the-cloud/core/cloud-forges";
+import { forgeKnownHosts } from "./forge-host-keys.ts";
 import { findConfigurationRecord, workspaceScopes, workspaceTemplatesFile, readWorkspaceTemplateStore, updateWorkspaceTemplateStore, type ConfigurationScope } from "./workspace-template.ts";
 
 export async function getWorkspaceTemplateSshKnownHosts(scope: ConfigurationScope, file = workspaceTemplatesFile()): Promise<string> {
@@ -38,7 +39,8 @@ export async function prepareWorkspaceSshTrust(directory: string, workspaceTempl
   await mkdir(directory, { recursive: true, mode: 0o700 });
   const path = join(directory, "known_hosts");
   const configuredHosts = await Promise.all(workspaceScopes(workspaceTemplateId).map((scope) => getWorkspaceTemplateSshKnownHosts(scope)));
-  await writeFileAtomic(path, `${gitHubKnownHosts}${configuredHosts.join("")}`, { mode: 0o644 });
+  const bundled = cloudForges.map((forge) => forgeKnownHosts[forge.id]).join("");
+  await writeFileAtomic(path, `${bundled}${configuredHosts.join("")}`, { mode: 0o644 });
   return path;
 }
 

@@ -4,14 +4,14 @@ import { buttonHtml } from "@agents-in-the-cloud/design-system/button";
 import { dialogHtml } from "@agents-in-the-cloud/design-system/dialog";
 import { agentsInTheCloudBrandIconHtml } from "@agents-in-the-cloud/design-system/icons";
 import { turboStreamResponse } from "@agents-in-the-cloud/shared";
-import { hasGitHubToken } from "@agents-in-the-cloud/proxy-egress";
+import { hasForgeAccount } from "@agents-in-the-cloud/proxy-egress";
 import { hasAvailableEnabledModel, renderModelsDialog } from "@agents-in-the-cloud/llm/server";
-import { renderGitHubConnectButton, renderGitHubConnection } from "../settings/github.ts";
+import { renderForgeConnectButton, renderForgeConnection } from "../settings/git-host.ts";
 import { update } from "@agents-in-the-cloud/shared/http";
 
 export async function renderOnboardingDialog(options: { includeCompleted?: boolean; resumeAfter?: "github" } = {}): Promise<string> {
   if (!options.includeCompleted && !options.resumeAfter && await onboardingCompleted()) return "";
-  const githubConnected = hasGitHubToken();
+  const githubConnected = hasForgeAccount("github");
   const modelsReady = await hasAvailableEnabledModel();
   if (options.resumeAfter) return renderModelsDialog({ host: "onboarding" });
   if (!options.includeCompleted && githubConnected) return modelsReady ? "" : renderModelsDialog({ host: "onboarding" });
@@ -26,9 +26,9 @@ export async function renderOnboardingDialog(options: { includeCompleted?: boole
     iconHtml: agentsInTheCloudBrandIconHtml,
     titleCaption: "Set up AgentsInTheCloud",
     bodyHtml: `<div class="onboarding-progress" aria-label="Onboarding progress"><span class="onboarding-progress-item" aria-current="step"></span>${needsModelsStep ? '<span class="onboarding-progress-item"></span>' : ""}</div>
-      <div class="onboarding-body form-stack"><h2 class="title">Connect GitHub</h2>${renderGitHubConnection("onboarding")}</div>`,
+      <div class="onboarding-body form-stack"><h2 class="title">Connect GitHub</h2>${renderForgeConnection("github", "onboarding")}</div>`,
     bodyLayout: "full-bleed",
-    footerHtml: `${continueAction}${githubConnected ? "" : renderGitHubConnectButton("onboarding")}`,
+    footerHtml: `${continueAction}${githubConnected ? "" : renderForgeConnectButton("github", "onboarding")}`,
     omitCancelButton: true,
   });
 }

@@ -11,6 +11,7 @@ describe("Workspace templates", () => {
     expect(parseWorkspaceTemplateSpec("git@github.com:org/repo.git")).toEqual({ gitUrl: "git@github.com:org/repo.git", branch: null });
     expect(parseWorkspaceTemplateSpec("github.com/octocat/Hello-World")).toEqual({ gitUrl: "https://github.com/octocat/Hello-World", branch: null });
     expect(parseWorkspaceTemplateSpec("github.com/octocat/Hello-World#main")).toEqual({ gitUrl: "https://github.com/octocat/Hello-World", branch: "main" });
+    expect(parseWorkspaceTemplateSpec("bitbucket.org/workspace/repo#main")).toEqual({ gitUrl: "https://bitbucket.org/workspace/repo", branch: "main" });
   });
 
   test("rejects malformed persisted Workspace templates", async () => {

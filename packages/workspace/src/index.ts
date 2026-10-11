@@ -4,7 +4,7 @@ import { workspaceImagePreloader } from "./preload.ts";
 import type { WorkspaceImageConfigureEvent } from "./events.ts";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { AgentsInTheCloudCoreError, agentsInTheCloudDataPath, createProcessFileLock, dockerHostAgentsInTheCloudDataPath, getAgentsInTheCloudRuntimeContext, gitHubCredentialHelperShellBody, invalidArguments, isJsonObject, readTextIfExists, requireDocker, runDocker, runDockerBuffer, withManagedDockerCommand, withCommandSignal, waitForCommand, shellQuote, writeJsonAtomic, type AgentsInTheCloudEventBus, type CommandInput, type JsonObject } from "@agents-in-the-cloud/core";
+import { AgentsInTheCloudCoreError, agentsInTheCloudDataPath, createProcessFileLock, dockerHostAgentsInTheCloudDataPath, forgeCredentialHelperShellBody, getAgentsInTheCloudRuntimeContext, invalidArguments, isJsonObject, readTextIfExists, requireDocker, runDocker, runDockerBuffer, withManagedDockerCommand, withCommandSignal, waitForCommand, shellQuote, writeJsonAtomic, type AgentsInTheCloudEventBus, type CommandInput, type JsonObject } from "@agents-in-the-cloud/core";
 import { runHostObservableCommand, stripTerminalControls, tailTerminalText } from "@agents-in-the-cloud/observable-terminal/server";
 import { errorMessage, isWorkspaceAppPort, workspaceGatewayPort, type WorkspaceGateway, type WorkspaceHttpAppBackend, type WorkspaceServerProvisioningHook } from "@agents-in-the-cloud/shared";
 import { inspectWorkspaceImage, resolveWorkspaceImage } from "@agents-in-the-cloud/workspace-image";
@@ -337,7 +337,7 @@ function workspaceCreateDockerArgs(container: string, image: string, plan: Works
 function workspaceGitCredentialInitScript(): string {
   return `cat > /usr/local/bin/agents-in-the-cloud-git-credential <<'EOF'
 #!/bin/sh
-${gitHubCredentialHelperShellBody}
+${forgeCredentialHelperShellBody()}
 EOF
 chmod 755 /usr/local/bin/agents-in-the-cloud-git-credential
 git config --system credential.helper '!/usr/local/bin/agents-in-the-cloud-git-credential'`;

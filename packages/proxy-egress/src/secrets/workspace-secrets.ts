@@ -1,11 +1,9 @@
-import { clearGitHubToken as clearStoredGitHubToken, discoverGitHubToken, hasGitHubToken as hasStoredGitHubToken, setGitHubToken as setStoredGitHubToken } from "@agents-in-the-cloud/core";
+import { clearForgeAccount as clearStoredForgeAccount, clearForgeAccounts as clearStoredForgeAccounts, cloudForge, discoverForgeAccount, discoverForgeAccounts, forgePlainEnv, hasForgeAccount as hasStoredForgeAccount, setForgeAccount as setStoredForgeAccount, type ForgeAccount, type ForgeId } from "@agents-in-the-cloud/core";
 import { workspaceTemplateIdOfInit, revealEffectiveSecrets, onWorkspaceTemplateStoreChanged, workspaceTemplateSecretPlaceholder, workspaceTemplateSecretHosts, workspaceTemplateSecretAllowsPath } from "@agents-in-the-cloud/workspace-templates";
 import { getWorkspaceInit, type WorkspaceInitInstruction } from "@agents-in-the-cloud/workspace";
 import { matchHostname } from "./patterns.ts";
 import { isWorkspaceEgressAddress } from "@agents-in-the-cloud/shared/egress-policy";
 import { createHttpHooks, type RequestTransformHttpHooks, type SecretRequestTransform, type SecretDefinition } from "./placeholder-hooks.ts";
-
-export const githubTokenEnvVar = "GH_TOKEN";
 
 export type WorkspaceSecretContext = {
   workspaceId: string;
@@ -51,19 +49,24 @@ function invalidateContexts(): void {
 }
 onWorkspaceTemplateStoreChanged(invalidateContexts);
 
-export { discoverGitHubToken };
+export { discoverForgeAccount, discoverForgeAccounts };
 
-export function hasGitHubToken(): boolean {
-  return hasStoredGitHubToken();
+export function hasForgeAccount(forge: ForgeId): boolean {
+  return hasStoredForgeAccount(forge);
 }
 
-export function setGitHubToken(token: string): void {
-  setStoredGitHubToken(token);
+export function setForgeAccount(account: ForgeAccount): void {
+  setStoredForgeAccount(account);
   invalidateContexts();
 }
 
-export function clearGitHubToken(): void {
-  clearStoredGitHubToken();
+export function clearForgeAccount(forge: ForgeId): void {
+  clearStoredForgeAccount(forge);
+  invalidateContexts();
+}
+
+export function clearForgeAccounts(): void {
+  clearStoredForgeAccounts();
   invalidateContexts();
 }
 
@@ -72,15 +75,21 @@ export async function createWorkspaceSecretContext(workspaceId: string, init?: W
   if (existing) return existing;
 
   const generation = configurationGeneration;
-  const token = discoverGitHubToken();
-  const secrets: Record<string, SecretDefinition> = token
-    ? { [githubTokenEnvVar]: { value: token, hosts: githubAllowedHosts(), placeholder: workspaceTemplateSecretPlaceholder(githubTokenEnvVar) } }
-    : {};
+  const accounts = discoverForgeAccounts();
+  const secrets: Record<string, SecretDefinition> = {};
+  for (const account of accounts) {
+    const forge = cloudForge(account.forge);
+    secrets[forge.tokenEnv] = {
+      value: account.token,
+      hosts: [forge.gitHost, forge.apiHost],
+      placeholder: workspaceTemplateSecretPlaceholder(forge.tokenEnv),
+    };
+  }
   for (const secret of await revealEffectiveSecrets(workspaceTemplateIdOfInit(init))) {
     secrets[secret.envName] = { value: secret.secretValue, allowInPath: workspaceTemplateSecretAllowsPath(secret), hosts: workspaceTemplateSecretHosts(secret.hostPattern), placeholder: secret.placeholder ?? workspaceTemplateSecretPlaceholder(secret.envName) };
   }
   if (generation !== configurationGeneration) return createWorkspaceSecretContext(workspaceId, init);
-  const created = buildContext(workspaceId, { ...secrets, ...subscriptionSecrets });
+  const created = buildContext(workspaceId, { ...secrets, ...subscriptionSecrets }, accounts);
   contexts.set(workspaceId, created);
   return created;
 }
@@ -98,7 +107,7 @@ export function forgetWorkspaceSecretContext(workspaceId: string): void {
   contexts.delete(workspaceId);
 }
 
-function buildContext(workspaceId: string, secrets: Record<string, SecretDefinition>): WorkspaceSecretContext {
+function buildContext(workspaceId: string, secrets: Record<string, SecretDefinition>, accounts: readonly ForgeAccount[]): WorkspaceSecretContext {
   const hooks = createHttpHooks({
     allowedHosts: ["*"],
     blockInternalRanges: false,
@@ -116,12 +125,11 @@ function buildContext(workspaceId: string, secrets: Record<string, SecretDefinit
   });
   return {
     workspaceId,
-    env: Object.fromEntries(Object.entries(hooks.env).filter(([name]) => !(name in subscriptionSecrets))),
+    env: {
+      ...forgePlainEnv(accounts),
+      ...Object.fromEntries(Object.entries(hooks.env).filter(([name]) => !(name in subscriptionSecrets))),
+    },
     hooks: hooks.httpHooks,
     secrets: hooks.secrets,
   };
-}
-
-function githubAllowedHosts(): string[] {
-  return ["github.com", "api.github.com"];
 }
