@@ -7,7 +7,6 @@ import { acceptCursorChatId } from "./session.ts";
 const installerUrl = "https://cursor.com/install";
 const bannedFlags = new Set(["--print", "-p", "--api-key", "--model", "--continue", "--resume=-1"]);
 
-/** Flags before `--` are the CLI invocation. The prompt text after `--` is the user's message. */
 export function assertCursorLaunchArgs(args: readonly string[]): void {
   const end = args.indexOf("--");
   const flags = end === -1 ? args : args.slice(0, end);
@@ -20,7 +19,6 @@ export function assertCursorLaunchArgs(args: readonly string[]): void {
   }
 }
 
-/** settings is unread. Cursor's own UI picks the model. */
 export function cursorLaunchScript(input: WorkspaceAgentInput, imagePaths: string[], _settings: AgentWorkspaceParameters, session: CliAgentSession, chatId?: string): string {
   const resumeId = chatId === undefined ? undefined : acceptCursorChatId(chatId);
   const prompt = cliPromptText(input, imagePaths.map(path => `Read the attached image at ${JSON.stringify(path)}.`));
@@ -32,7 +30,6 @@ export function cursorLaunchScript(input: WorkspaceAgentInput, imagePaths: strin
     ? args.map(shellQuote).join(" ")
     : `${fixed.map(shellQuote).join(" ")} --resume "$chat_id"${tail.length ? ` ${tail.map(shellQuote).join(" ")}` : ""}`;
   const chatFile = shellQuote(`${session.directory}/cursor/chat-id`);
-  // This CLI build prints the id and then keeps the sqlite connection open.
   const discoverChat = `
 mkdir -p "$(dirname ${chatFile})"
 if [ -f ${chatFile} ]; then
@@ -80,7 +77,6 @@ unset CURSOR_API_KEY
     staging="$(mktemp -d "$HOME/.cursor-agent-install.XXXXXX")"
     trap 'rm -rf "$staging"' EXIT
     curl -fsSL ${shellQuote(installerUrl)} -o "$staging/install.sh"
-    # No controlling terminal, and ~/.local/bin is already on PATH so the installer does not edit shell profiles.
     PATH="$HOME/.local/bin:/usr/bin:/bin" setsid --wait sh "$staging/install.sh" </dev/null
     test -x "$executable"
     printf '%s\\n' "$now" > "$stamp"
@@ -113,7 +109,7 @@ rm -f "$status_err"
 export PATH="$HOME/.local/bin:$PATH"
 cd ${shellQuote(workspaceRoot)}
 ${resumeId ? "" : discoverChat}
-# exec keeps agent as the pane foreground. A pipe on this process selects print mode.
+# A pipe on this process selects print mode.
 exec "$executable" ${execArgs}
 `;
 }

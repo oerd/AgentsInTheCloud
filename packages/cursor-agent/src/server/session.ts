@@ -4,12 +4,10 @@ import { join } from "node:path";
 
 export const cursorAgentId = "cursor" as const;
 
-/** The host's prepareCliAgentConnection already returns this loopback URL. */
 export const cursorMcpUrl = "http://127.0.0.1:2988/mcp" as const;
 
 export const cursorMcpServerName = "agents-in-the-cloud";
 
-/** Commands containing this text are ours and are replaced on the next merge. */
 export const cursorHookMarker = "runtime.mjs hook";
 
 export type CursorStopStatus = "completed" | "aborted" | "error";
@@ -24,7 +22,6 @@ export type CursorPaneIdentity =
   | { kind: "ours"; sessionId: string }
   | { kind: "foreign" };
 
-/** Session file `${session.directory}/cursor/connection.json`. Token stays here, mode 0600. */
 export interface CursorConnectionFile {
   url: typeof cursorMcpUrl;
   token: string;
@@ -82,21 +79,15 @@ export type CursorStopReply = Record<string, never>;
 
 export type CursorAuthDecision = "logged-in" | "logged-out";
 
-// These parsers are the JSON boundary. Their source is copied into runtime.mjs, which cannot import typebox.
-/* oxlint-disable anti-slop/no-runtime-typeof, anti-slop/no-unknown-parameters, anti-slop/no-unsafe-dictionary-type */
+/* oxlint-disable anti-slop/no-runtime-typeof, anti-slop/no-unknown-parameters, anti-slop/no-unsafe-dictionary-type -- embedded into runtime.mjs via Function#toString */
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-/**
- * Classify a tmux session name the runtime actually read.
- * `cursor-<uuid>` with a real UUID is ours. Any other name is foreign.
- */
 export function identifyCursorPane(tmuxSessionName: string): CursorPaneIdentity {
   const prefix = `${cursorAgentId}-`;
   if (!tmuxSessionName.startsWith(prefix)) return { kind: "foreign" };
   const sessionId = tmuxSessionName.slice(prefix.length);
-  // Same UUID `--resume` accepts in Cursor agent CLI 2026.10.01-e373342.
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(sessionId)) return { kind: "foreign" };
   return { kind: "ours", sessionId };
 }
@@ -153,10 +144,6 @@ function knownUserInfoKey(key: string): boolean {
   return key === "email" || key === "userId" || key === "firstName" || key === "lastName" || key === "teamId" || key === "teamName" || key === "createdAt";
 }
 
-/**
- * Fail closed against `agent status --format json` from Cursor agent CLI 2026.10.01-e373342.
- * Exit 0 is logged in, exit 10 is logged out, and anything else is schema drift.
- */
 export function cursorAuthDecision(value: unknown): CursorAuthDecision {
   if (!isRecord(value)) throw new Error("Cursor status schema is not the captured document");
   for (const key of Object.keys(value)) {
@@ -544,7 +531,6 @@ main().catch((error) => {
 });
 `;
 
-/** Node program written to ~/.cursor/agents-in-the-cloud/runtime.mjs. Policy functions are embedded, not retyped. */
 export function cursorRuntimeScript(): string {
   const functions = [isRecord, identifyCursorPane, parseCursorConnection, cursorTurnBoundary, cursorSessionStartReply, cursorPromptReply, cursorStopReply, parseCursorStopStatus, acceptCursorChatId, parseCursorChatId, knownAuthKey, knownUserInfoKey, cursorAuthDecision, knownHookField, hookCommand, parseCursorHooksFile, isOwnedHook, mergeCursorHooks, stringRecord, knownMcpField, mcpServer, parseCursorMcpFile, mergeCursorMcp];
   return [
@@ -558,7 +544,6 @@ export function cursorRuntimeScript(): string {
   ].join("\n");
 }
 
-/** Shared-home writes. The runtime source is the command's stdin, so the token never enters this string. */
 export function cursorSharedHomeScript(session: CliAgentSession): string {
   const directory = shellQuote(session.directory);
   const id = shellQuote(session.id);
@@ -600,7 +585,6 @@ export async function prepareCursorSession(workspaceId: string, session: CliAgen
   return {};
 }
 
-/** `.local/share` is the workspace-private home mount, so the host path is not `session.directory`. */
 export async function readCursorChatId(workspaceId: string, session: CliAgentSession): Promise<string | undefined> {
   const path = join(getAgentsInTheCloudRuntimeContext().agentsInTheCloudDataDir, "workspaces", workspaceId, "home-local", ".local", "share", "agents-in-the-cloud-agents", session.id, "cursor", "chat-id");
   return parseCursorChatId(await readTextIfExists(path));
