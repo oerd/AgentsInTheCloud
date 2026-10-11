@@ -74,16 +74,12 @@ export function cloudForge(id: ForgeId): CloudForge {
   return forge;
 }
 
-/** True when the trimmed spec starts with `<gitHost>/` for either forge, any case. */
 export function isSchemeLessCloudForgeSpec(value: string): boolean {
   const trimmed = value.trim().toLowerCase();
   return cloudForges.some((forge) => trimmed.startsWith(`${forge.gitHost}/`));
 }
 
-/**
- * Submodule URLs are repository-controlled, so the helper answers only the git host
- * from the tuple. The case arm is the whole allowlist.
- */
+/** Submodule URLs are repository-controlled, so the helper answers only the git host from the tuple. */
 export function forgeCredentialHelperShellBody(): string {
   const arms = cloudForges.map((forge) => {
     if (!shellToken.test(forge.gitUsername) || !shellToken.test(forge.tokenEnv) || !shellHost.test(forge.gitHost)) {

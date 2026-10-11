@@ -19,13 +19,15 @@ const bitbucketAccountFileSchema = Type.Object({
   token: Type.String(),
 }, { additionalProperties: false });
 
+function isAtlassianAccountEmail(value: string): value is AtlassianAccountEmail {
+  if (!value || /\s/.test(value) || value.includes(":") || value.split("@").length !== 2) return false;
+  const [local, domain] = value.split("@");
+  return Boolean(local && domain);
+}
+
 export function parseAtlassianAccountEmail(value: string): AtlassianAccountEmail | undefined {
   const email = value.trim();
-  if (!email || /\s/.test(email) || email.includes(":") || email.split("@").length !== 2) return undefined;
-  const [local, domain] = email.split("@");
-  if (!local || !domain) return undefined;
-  // SAFETY: blank, whitespace, colon, and @ count were rejected above.
-  return email as AtlassianAccountEmail;
+  return isAtlassianAccountEmail(email) ? email : undefined;
 }
 
 export function parseBitbucketToken(value: string): string | undefined {
