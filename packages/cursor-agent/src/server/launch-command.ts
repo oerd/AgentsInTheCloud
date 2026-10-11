@@ -57,6 +57,32 @@ chat_tmp=""
 chat_next=""
 trap 'code=$?; if [ -n "$chat_pid" ]; then kill -TERM -"$chat_pid" 2>/dev/null || true; fi; rm -f "$status_err" "$chat_tmp" "$chat_next"; if [ "$code" -ne 0 ]; then printf "$failure_message" "$code"; fi' EXIT
 unset CURSOR_API_KEY
+# .local/share is a per-workspace mount, so the version payload lives under ~/.cursor.
+publish_cursor_agent() {
+  link="$HOME/.local/bin/agent"
+  if [ ! -L "$link" ]; then return 0; fi
+  target=$(readlink "$link")
+  prefix="$HOME/.local/share/cursor-agent/versions/"
+  case "$target" in
+    "$prefix"*) ;;
+    *) return 0 ;;
+  esac
+  version_dir=$(dirname "$target")
+  dest="$HOME/.cursor/cursor-agent/versions/$(basename "$version_dir")"
+  if [ -d "$version_dir" ]; then
+    mkdir -p "$dest"
+    cp -a "$version_dir/." "$dest/"
+  fi
+  if [ ! -x "$dest/cursor-agent" ]; then
+    printf '%s\\n' 'Cursor install did not leave a shared agent binary.' >&2
+    exit 1
+  fi
+  ln -sfn "$dest/cursor-agent" "$link"
+  if [ -L "$HOME/.local/bin/cursor-agent" ]; then
+    ln -sfn "$dest/cursor-agent" "$HOME/.local/bin/cursor-agent"
+  fi
+  rm -rf "$version_dir"
+}
 (
   flock 9
   cd "$HOME"
@@ -65,7 +91,7 @@ unset CURSOR_API_KEY
   now="$(date +%s)"
   checked=0
   if [ -f "$stamp" ]; then checked="$(cat "$stamp")"; fi
-  if [ ! -x "$executable" ]; then
+  if [ ! -e "$executable" ] || [ ! -x "$executable" ]; then
     printf '%s\\n' 'Installing latest Cursor into shared home…'
     staging="$(mktemp -d "$HOME/.cursor-agent-install.XXXXXX")"
     trap 'rm -rf "$staging"' EXIT
@@ -81,6 +107,8 @@ unset CURSOR_API_KEY
       printf '%s\\n' 'Cursor update failed. Starting the installed version; we’ll retry next launch.'
     fi
   fi
+  publish_cursor_agent
+  test -x "$executable"
 ) 9>"$HOME/.cursor-agent-install.lock"
 executable="$HOME/.local/bin/agent"
 runtime="$HOME/.cursor/agents-in-the-cloud/runtime.mjs"

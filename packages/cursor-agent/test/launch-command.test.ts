@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { chmod, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readdir, readFile, readlink, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { CliAgentSession } from "@agents-in-the-cloud/cli-agent/server";
@@ -21,6 +21,14 @@ if [ "$1" = login ]; then printf 'LOGIN\\n'; exit 0; fi
 if [ "$1" = update ]; then
   printf '%s\\n' "$*" >> "$HOME/updates"
   if [ -f "$HOME/fail-update" ]; then echo update-failed >&2; exit 42; fi
+  if [ -f "$HOME/update-version" ]; then
+    ver=$(cat "$HOME/update-version")
+    dir="$HOME/.local/share/cursor-agent/versions/$ver"
+    mkdir -p "$dir"
+    cp "$HOME/agent-template" "$dir/cursor-agent"
+    chmod +x "$dir/cursor-agent"
+    ln -sfn "$dir/cursor-agent" "$HOME/.local/bin/agent"
+  fi
   exit 0
 fi
 if [ "$1" = create-chat ]; then
@@ -60,9 +68,13 @@ beforeEach(async () => {
   await executable(`${home}/.local/bin/agent`, agentProgram);
   await executable(`${home}/agent-template`, agentProgram);
   await writeFile(`${home}/installer-template`, `#!/bin/sh
-mkdir -p "$HOME/.local/bin"
-cp "$HOME/agent-template" "$HOME/.local/bin/agent"
-chmod +x "$HOME/.local/bin/agent"
+ver=2026.10.01-test
+dir="$HOME/.local/share/cursor-agent/versions/$ver"
+mkdir -p "$dir" "$HOME/.local/bin"
+cp "$HOME/agent-template" "$dir/cursor-agent"
+chmod +x "$dir/cursor-agent"
+ln -sfn "$dir/cursor-agent" "$HOME/.local/bin/agent"
+ln -sfn "$dir/cursor-agent" "$HOME/.local/bin/cursor-agent"
 `);
   await executable(`${home}/tools/curl`, `#!/bin/sh
 printf '%s\\n' "$*" >> "$HOME/installs"
@@ -184,6 +196,10 @@ test("first launch installs once, and a failed daily update still starts the ins
   const installs = (await readFile(`${home}/installs`, "utf8")).trim().split("\n");
   expect(installs).toHaveLength(1);
   expect(installs[0]?.startsWith("-fsSL https://cursor.com/install -o ")).toBe(true);
+  const shared = `${home}/.cursor/cursor-agent/versions/2026.10.01-test/cursor-agent`;
+  expect(await readlink(`${home}/.local/bin/agent`)).toBe(shared);
+  expect(await readlink(`${home}/.local/bin/cursor-agent`)).toBe(shared);
+  expect(await Bun.file(`${home}/.local/share/cursor-agent/versions/2026.10.01-test/cursor-agent`).exists()).toBe(false);
   await writeFile(`${home}/fail-update`, "");
   await writeFile(`${home}/.cursor-agent-update-check`, String(Math.floor(Date.now() / 1000) - 90_000));
   const [code, output, error] = await run(cursorLaunchScript(empty, [], {}, session));
@@ -191,4 +207,44 @@ test("first launch installs once, and a failed daily update still starts the ins
   expect(error).toContain("update-failed");
   expect(output).toContain("Cursor update failed. Starting the installed version");
   expect(argsOf(output)).toEqual(["--force", "--approve-mcps", "--sandbox", "disabled", "--resume", sessionId]);
+  expect(await readlink(`${home}/.local/bin/agent`)).toBe(shared);
+});
+
+test("a dangling agent symlink reinstalls into the shared cursor directory", async () => {
+  await mkdir(`${home}/session/cursor`, { recursive: true });
+  await writeFile(`${home}/session/cursor/chat-id`, `${sessionId}\n`);
+  await rm(`${home}/.local/bin/agent`);
+  await symlink(`${home}/.local/share/cursor-agent/versions/missing/cursor-agent`, `${home}/.local/bin/agent`);
+  const [code, output, error] = await run(cursorLaunchScript(empty, [], {}, session));
+  expect({ code, error }).toEqual({ code: 0, error: "" });
+  expect(output).toContain("Installing latest Cursor into shared home…");
+  const shared = `${home}/.cursor/cursor-agent/versions/2026.10.01-test/cursor-agent`;
+  expect(await readlink(`${home}/.local/bin/agent`)).toBe(shared);
+  expect(await Bun.file(shared).exists()).toBe(true);
+});
+
+test("an existing private payload and a later update both land in the shared cursor directory", async () => {
+  await mkdir(`${home}/session/cursor`, { recursive: true });
+  await writeFile(`${home}/session/cursor/chat-id`, `${sessionId}\n`);
+  const version = "2026.09.01-old";
+  const privateDir = `${home}/.local/share/cursor-agent/versions/${version}`;
+  await mkdir(privateDir, { recursive: true });
+  await writeFile(`${privateDir}/cursor-agent`, await readFile(`${home}/agent-template`));
+  await chmod(`${privateDir}/cursor-agent`, 0o755);
+  await rm(`${home}/.local/bin/agent`);
+  await symlink(`${privateDir}/cursor-agent`, `${home}/.local/bin/agent`);
+  const moved = await run(cursorLaunchScript(empty, [], {}, session));
+  expect({ code: moved[0], error: moved[2] }).toEqual({ code: 0, error: "" });
+  expect(moved[1]).not.toContain("Installing latest Cursor");
+  const sharedOld = `${home}/.cursor/cursor-agent/versions/${version}/cursor-agent`;
+  expect(await readlink(`${home}/.local/bin/agent`)).toBe(sharedOld);
+  expect(await Bun.file(`${privateDir}/cursor-agent`).exists()).toBe(false);
+  await writeFile(`${home}/update-version`, "2026.10.02-test");
+  await writeFile(`${home}/.cursor-agent-update-check`, String(Math.floor(Date.now() / 1000) - 90_000));
+  const updated = await run(cursorLaunchScript(empty, [], {}, session));
+  expect({ code: updated[0], error: updated[2] }).toEqual({ code: 0, error: "" });
+  const sharedNew = `${home}/.cursor/cursor-agent/versions/2026.10.02-test/cursor-agent`;
+  expect(await readlink(`${home}/.local/bin/agent`)).toBe(sharedNew);
+  expect(await Bun.file(sharedNew).exists()).toBe(true);
+  expect(await Bun.file(`${home}/.local/share/cursor-agent/versions/2026.10.02-test/cursor-agent`).exists()).toBe(false);
 });
