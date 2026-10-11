@@ -4,7 +4,8 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./json-settings": "./src/json-settings.ts"
+    "./json-settings": "./src/json-settings.ts",
+    "./ghcr": "./src/ghcr.ts"
   },
   "dependencies": {
     "typebox": "^1.0.57"
