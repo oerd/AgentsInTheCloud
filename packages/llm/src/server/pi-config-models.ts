@@ -1,3 +1,4 @@
+import { codexProviderId, type CodexSubscription } from "./codex-subscription.ts";
 import { availableProviderModels } from "./known-model-provider-incorrectness.ts";
 import { providerAvailability } from "./provider-availability.ts";
 import type { ModelRef } from "./model-reference.ts";
@@ -11,7 +12,7 @@ import { arch, platform, release } from "node:os";
 import { dirname, join } from "node:path";
 import { agentsInTheCloudDataPath, getAgentsInTheCloudRuntimeContext, isJsonObject, readTextIfExists, writeJsonAtomic, type JsonObject, type JsonValue } from "@agents-in-the-cloud/core";
 import { errorMessage } from "@agents-in-the-cloud/shared";
-import type { Api, AuthInteraction, AuthPrompt, Model, ProviderHeaders } from "@earendil-works/pi-ai";
+import type { Api, AuthInteraction, AuthPrompt, CredentialStore, Model, ProviderHeaders } from "@earendil-works/pi-ai";
 import { InMemoryCredentialStore } from "@earendil-works/pi-ai";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
@@ -248,6 +249,28 @@ export async function loginPiOAuthProvider(providerId: string, interaction: Auth
   forgetSubscriptionState(providerId);
   if (providerId === "openai" || providerId === "anthropic") await syncSubscriptionClis(runtime);
   await refreshConnectedProviderCatalogue(runtime, providerId, interaction.signal);
+}
+
+export async function saveCodexSubscription(subscription: CodexSubscription): Promise<void> {
+  const runtime = await createPiModelRuntime();
+  if (await storeCodexSubscription(runtime, subscription)) forgetSubscriptionState(codexProviderId);
+  await refreshConnectedProviderCatalogue(runtime, codexProviderId);
+}
+
+async function storeCodexSubscription(runtime: ModelRuntime, subscription: CodexSubscription): Promise<boolean> {
+  // SAFETY: ModelRuntime keeps the process-wide auth.json CredentialStore private. Login reads that same store.
+  const credentials = (runtime as ModelRuntime & { credentials: CredentialStore }).credentials;
+  let wrote = false;
+  await credentials.modify(codexProviderId, async (current) => {
+    if (current?.type === "oauth"
+      && current.access === subscription.access
+      && current.refresh === subscription.refresh
+      && current.expires === subscription.expiresAtMs
+      && current.accountId === subscription.accountId) return undefined;
+    wrote = true;
+    return { type: "oauth", access: subscription.access, refresh: subscription.refresh, expires: subscription.expiresAtMs, accountId: subscription.accountId };
+  });
+  return wrote;
 }
 
 /** Probe stored catalogue models or a not-yet-saved custom model using an in-memory credential. */
