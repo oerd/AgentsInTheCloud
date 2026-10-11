@@ -1,3 +1,4 @@
+import { productImages } from "../../../packages/shared/src/image-reference.ts";
 import { readFile } from "node:fs/promises";
 import { Type } from "typebox";
 import { Value } from "typebox/value";
@@ -20,7 +21,7 @@ export async function prepareChannelUpdate(settingsPath: string, images: {
   const settings: unknown = text === undefined ? {} : JSON.parse(text);
   if (!Value.Check(settingsSchema, settings)) throw new Error("Invalid update settings");
   const updateChannel = settings.releaseChannel ?? "latest";
-  const reference = `ghcr.io/lucasmeijer/agents-in-the-cloud:${updateChannel}`;
+  const reference = productImages.app.tagged(updateChannel);
   // Always refresh the mutable channel tag, even if Docker already has it.
   // Pin the result before dependencies are prepared or the app is stopped.
   await images.pull(reference);

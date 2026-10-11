@@ -1,3 +1,4 @@
+import { productImages } from "../packages/shared/src/image-reference.ts";
 import { expect, test } from "bun:test";
 
 const installer = await Bun.file(new URL("./install.sh", import.meta.url)).text();
@@ -137,11 +138,30 @@ test("failed pull leaves existing System untouched", () => {
 });
 
 test("pull rejected by a stale ghcr.io login explains how to clear it", () => {
-  const result = run({ pullDenied: true });
+  const result = run({ pullDenied: true }, ["--system-image", "ghcr.io/lucasmeijer/agents-in-the-cloud-system:latest"]);
   expect(result.status).not.toBe(0);
   expect(result.output).toContain("GitHub turned down Docker's saved login for ghcr.io");
   expect(result.output).toContain("Run: docker logout ghcr.io, then run this installer again.");
   expect(result.output).not.toContain("DOCKER run");
+});
+
+test("a Docker Hub pull denial keeps the generic download error", () => {
+  const result = run({ pullDenied: true });
+  expect(result.status).not.toBe(0);
+  expect(result.output).toContain("Downloading AgentsInTheCloud services failed. See the bootstrap log for details.");
+  expect(result.output).not.toContain("docker logout");
+  expect(result.output).not.toContain("DOCKER run");
+});
+
+test("install defaults and help lines match the product catalog", () => {
+  const system = "docker.io/oerd/agents-in-the-cloud-system:latest";
+  const app = "docker.io/oerd/agents-in-the-cloud:latest";
+  expect(productImages.system.tagged("latest")).toBe(system);
+  expect(productImages.app.tagged("latest")).toBe(app);
+  expect(installer).toContain(`system_image=${system}\n`);
+  expect(installer).toContain(`app_image=${app}\n`);
+  expect(installer).toContain(`--system-image REF   System image (default: ${system})`);
+  expect(installer).toContain(`--app-image REF      First-install app image (default: ${app})`);
 });
 
 test("other pull failures keep the generic message", () => {
@@ -484,8 +504,8 @@ test("pre-System Atelier uninstall fails explicitly rather than claiming nothing
 test("fresh installer uses latest in the separate renamed repositories", () => {
   const result = run({});
   expect(result.status).toBe(0);
-  expect(result.output).toContain("DOCKER pull ghcr.io/lucasmeijer/agents-in-the-cloud-system:latest");
-  expect(result.output).toContain("--app-image ghcr.io/lucasmeijer/agents-in-the-cloud:latest");
+  expect(result.output).toContain("DOCKER pull docker.io/oerd/agents-in-the-cloud-system:latest");
+  expect(result.output).toContain("--app-image docker.io/oerd/agents-in-the-cloud:latest");
   expect(result.output).not.toContain(":beta");
 });
 

@@ -1,8 +1,7 @@
+import { productImages } from "../../../shared/src/image-reference.ts";
 import { type UpdateChannel } from "./update-channel.ts";
 import { Type, type Static } from "typebox";
 import { Value } from "typebox/value";
-
-export const repository = "lucasmeijer/agents-in-the-cloud";
 
 export type HttpFetcher = (input: string | URL, init?: RequestInit) => Promise<Response>;
 
@@ -113,8 +112,24 @@ async function fetchRegistryImage(base: string, version: string, fetcher: HttpFe
   return { digest, layers: manifest.layers, labels: config.config?.Labels ?? {} };
 }
 
+function registryLocation(reference: string) {
+  const parts = reference.split("/");
+  const explicitRegistry = parts.length > 1 && (parts[0]!.includes(".") || parts[0]!.includes(":") || parts[0] === "localhost");
+  const registry = explicitRegistry ? parts.shift()! : "docker.io";
+  let name = parts.join("/");
+  const separator = name.includes("@") ? name.indexOf("@") : name.lastIndexOf(":");
+  const version = separator === -1 ? "latest" : name.slice(separator + 1);
+  name = separator === -1 ? name : name.slice(0, separator);
+  if (reference.includes("@") && name.includes(":")) name = name.slice(0, name.lastIndexOf(":"));
+  if (registry === "docker.io" && !name.includes("/")) name = `library/${name}`;
+  const host = registry === "docker.io" ? "registry-1.docker.io" : registry;
+  const protocol = /^(localhost|127\.0\.0\.1)(:|$)/.test(host) ? "http" : "https";
+  return { base: `${protocol}://${host}/v2/${name}`, version, registry, name };
+}
+
 export async function fetchChannelImageMetadata(channel: UpdateChannel, fetcher: HttpFetcher = fetch, platform = { os: "linux", architecture: currentArch() }): Promise<ImageMetadata> {
-  const image = await fetchRegistryImage(`https://ghcr.io/v2/${repository}`, channel, fetcher, platform);
+  const located = registryLocation(productImages.app.tagged(channel));
+  const image = await fetchRegistryImage(located.base, located.version, fetcher, platform);
   return { digest: image.digest, revision: image.labels["org.opencontainers.image.revision"] };
 }
 
@@ -129,22 +144,11 @@ export interface PlannedImage {
 /** Read only manifests and configuration; no image layers are downloaded here. */
 export async function resolveImage(reference: string, fetcher: HttpFetcher = fetch, platform = { os: "linux", architecture: currentArch() }): Promise<PlannedImage> {
   Value.Assert(imageReferenceSchema, reference);
-  const parts = reference.split("/");
-  const explicitRegistry = parts.length > 1 && (parts[0]!.includes(".") || parts[0]!.includes(":") || parts[0] === "localhost");
-  const registry = explicitRegistry ? parts.shift()! : "docker.io";
-  let name = parts.join("/");
-  const separator = name.includes("@") ? name.indexOf("@") : name.lastIndexOf(":");
-  const version = separator === -1 ? "latest" : name.slice(separator + 1);
-  name = separator === -1 ? name : name.slice(0, separator);
-  if (reference.includes("@") && name.includes(":")) name = name.slice(0, name.lastIndexOf(":"));
-  if (registry === "docker.io" && !name.includes("/")) name = `library/${name}`;
-  const host = registry === "docker.io" ? "registry-1.docker.io" : registry;
-  const protocol = /^(localhost|127\.0\.0\.1)(:|$)/.test(host) ? "http" : "https";
-  const base = `${protocol}://${host}/v2/${name}`;
-  const image = await fetchRegistryImage(base, version, fetcher, platform);
+  const located = registryLocation(reference);
+  const image = await fetchRegistryImage(located.base, located.version, fetcher, platform);
   const dependencies = Value.Parse(Type.Array(imageReferenceSchema), JSON.parse(image.labels["eagerly-preload"] ?? "[]"));
   // Preserve an explicitly selected index digest so Docker also registers that declared reference.
-  const pinnedDigest = reference.includes("@") ? version : image.digest;
+  const pinnedDigest = reference.includes("@") ? located.version : image.digest;
   if (!/^sha256:[a-f0-9]{64}$/.test(pinnedDigest)) throw new Error("Invalid image digest");
-  return { reference: `${registry}/${name}@${pinnedDigest}`, layers: image.layers, dependencies };
+  return { reference: `${located.registry}/${located.name}@${pinnedDigest}`, layers: image.layers, dependencies };
 }

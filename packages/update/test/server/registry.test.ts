@@ -137,10 +137,10 @@ test("latest discovery only requests the new product's latest tag", async () => 
   const fetcher = async (input: URL | RequestInfo) => {
     const url = String(input);
     calls.push(url);
-    if (url === "https://ghcr.io/v2/lucasmeijer/agents-in-the-cloud/manifests/latest") {
+    if (url === "https://registry-1.docker.io/v2/oerd/agents-in-the-cloud/manifests/latest") {
       return Response.json({ config: { digest: "sha256:latest-config" }, layers: [] }, { headers: { "docker-content-digest": "sha256:latest-manifest" } });
     }
-    if (url === "https://ghcr.io/v2/lucasmeijer/agents-in-the-cloud/blobs/sha256:latest-config") {
+    if (url === "https://registry-1.docker.io/v2/oerd/agents-in-the-cloud/blobs/sha256:latest-config") {
       return Response.json({ os: "linux", architecture: process.arch === "arm64" ? "arm64" : "amd64", config: { Labels: { "org.opencontainers.image.revision": "latest-revision" } } });
     }
     throw new Error(`unexpected fetch ${url}`);

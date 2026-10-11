@@ -1,3 +1,4 @@
+import { productImages } from "../../../packages/shared/src/image-reference.ts";
 import { tailscaleHttpsSettingsUrl, TailscaleHttpsDisabledError } from "../../../packages/shared/src/tailscale.ts";
 import { hostSocketPath } from "../../../packages/host/src/protocol.ts";
 import { startHostService } from "../../../packages/host/src/system/service.ts";
@@ -28,7 +29,7 @@ const { values } = parseArgs({
     "access-mode": { type: "string", default: "tailscale" },
     "app-image": {
       type: "string",
-      default: "ghcr.io/lucasmeijer/agents-in-the-cloud:latest",
+      default: productImages.app.tagged("latest"),
     },
   },
   strict: true,

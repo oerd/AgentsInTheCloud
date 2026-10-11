@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-system_image=ghcr.io/lucasmeijer/agents-in-the-cloud-system:latest
-app_image=ghcr.io/lucasmeijer/agents-in-the-cloud:latest
+system_image=docker.io/oerd/agents-in-the-cloud-system:latest
+app_image=docker.io/oerd/agents-in-the-cloud:latest
 action=""
 uninstall_requested=0
 access_mode=""
@@ -120,8 +120,8 @@ Installs AgentsInTheCloud System, or offers actions for an existing installation
 System replacements preserve the agents-in-the-cloud-system volume and interrupt workspaces.
 Update also installs the newest AgentsInTheCloud app on the installation's selected channel.
 
-  --system-image REF   System image (default: ghcr.io/lucasmeijer/agents-in-the-cloud-system:latest)
-  --app-image REF      First-install app image (default: ghcr.io/lucasmeijer/agents-in-the-cloud:latest)
+  --system-image REF   System image (default: docker.io/oerd/agents-in-the-cloud-system:latest)
+  --app-image REF      First-install app image (default: docker.io/oerd/agents-in-the-cloud:latest)
   --access-mode MODE  localhost or tailscale (default selected for this machine)
   --action ACTION     install, update, connect, or open
                       connect enables Tailscale without replacing an existing installation
