@@ -95,11 +95,18 @@ test("previous Agent type preference remains readable and new choices use the re
 });
 
 
-test("Cursor resolves to the CLI adapter", async () => {
+test("Cursor resolves to the CLI adapter without a host model", async () => {
   const { agentsInTheCloudServerModule: cursor } = await import("@agents-in-the-cloud/cursor-agent/server");
   expect(getAgentType("cursor")).toBe(cursor.agentType!);
   expect(cursor.id).toBe("cursor-agent");
   expect(cursor.agentType?.label).toBe("Cursor");
+  const form = new FormData();
+  form.set("model", "cursor::composer");
+  form.set("thinkingLevel", "high");
+  const submitted = await cursor.agentType!.launch.submit(form);
+  if (!("prepare" in submitted)) throw new Error("Cursor launch did not return settings");
+  expect(await submitted.prepare()).toEqual({ agent: {} });
+  expect(await cursor.agentType!.launch.renderFooter({ frameId: "frame", formId: "form", url: "/launch", query: new URLSearchParams() })).toBe("");
 });
 
 test("Codex and Codex CLI resolve to distinct implementations without old aliases", async () => {

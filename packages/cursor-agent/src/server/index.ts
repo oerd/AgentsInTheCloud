@@ -1,8 +1,10 @@
-import { createCliAgentModule } from "@agents-in-the-cloud/cli-agent/server";
+import { createCliAgentModule, emptyAgentInput } from "@agents-in-the-cloud/cli-agent/server";
 import { providerBrandIconHtml } from "@agents-in-the-cloud/shared";
+import { cursorLaunchScript } from "./launch-command.ts";
+import { cursorAgentId, prepareCursorSession, readCursorChatId } from "./session.ts";
 
 export const agentsInTheCloudServerModule = createCliAgentModule({
-  id: "cursor",
+  id: cursorAgentId,
   label: "Cursor",
   iconHtml: providerBrandIconHtml("cursor", "Cursor"),
   async requireSetup() {},
@@ -10,7 +12,7 @@ export const agentsInTheCloudServerModule = createCliAgentModule({
     async renderFooter() { return ""; },
     async prepare() { return {}; },
   },
-  async prepareSession() { return {}; },
-  launchScript() { return "printf '%s\\n' 'Cursor is not installed yet'\nexit 1\n"; },
-  async resumeScript() { return "printf '%s\\n' 'Cursor is not installed yet'\nexit 1\n"; },
+  prepareSession: prepareCursorSession,
+  launchScript: (input, imagePaths, settings, session) => cursorLaunchScript(input, imagePaths, settings, session),
+  resumeScript: async (workspaceId, settings, session) => cursorLaunchScript(emptyAgentInput(), [], settings, session, await readCursorChatId(workspaceId, session)),
 });
