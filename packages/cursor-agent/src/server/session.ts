@@ -1,6 +1,5 @@
-import { readTextIfExists, shellQuote, getAgentsInTheCloudRuntimeContext } from "@agents-in-the-cloud/core";
+import { shellQuote } from "@agents-in-the-cloud/core";
 import { checkedWorkspaceShell, writeCliSessionFiles, type CliAgentConnection, type CliAgentSession } from "@agents-in-the-cloud/cli-agent/server";
-import { join } from "node:path";
 
 export const cursorAgentId = "cursor" as const;
 
@@ -55,11 +54,6 @@ export function acceptCursorChatId(contents: string): string {
   if (line.length === 0 || line.includes("\n") || line !== line.trim()) throw new Error("Cursor chat id is empty or contains a newline");
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(line)) throw new Error("Cursor chat id is not a UUID");
   return line;
-}
-
-export function parseCursorChatId(contents: string | undefined): string | undefined {
-  if (contents === undefined) return undefined;
-  return acceptCursorChatId(contents);
 }
 
 export function cursorSessionStartReply(instructions: string): CursorSessionStartReply {
@@ -275,9 +269,4 @@ export async function prepareCursorSession(workspaceId: string, session: CliAgen
     [cursorSessionDirEnv]: session.directory,
     [cursorMcpTokenEnv]: connection.token,
   };
-}
-
-export async function readCursorChatId(workspaceId: string, session: CliAgentSession): Promise<string | undefined> {
-  const path = join(getAgentsInTheCloudRuntimeContext().agentsInTheCloudDataDir, "workspaces", workspaceId, "home-local", ".local", "share", "agents-in-the-cloud-agents", session.id, "cursor", "chat-id");
-  return parseCursorChatId(await readTextIfExists(path));
 }

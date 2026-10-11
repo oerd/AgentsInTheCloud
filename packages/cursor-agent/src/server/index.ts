@@ -1,7 +1,7 @@
 import { createCliAgentModule, emptyAgentInput } from "@agents-in-the-cloud/cli-agent/server";
 import { providerBrandIconHtml } from "@agents-in-the-cloud/shared";
 import { cursorLaunchScript } from "./launch-command.ts";
-import { cursorAgentId, prepareCursorSession, readCursorChatId } from "./session.ts";
+import { cursorAgentId, prepareCursorSession } from "./session.ts";
 
 export const agentsInTheCloudServerModule = createCliAgentModule({
   id: cursorAgentId,
@@ -14,5 +14,5 @@ export const agentsInTheCloudServerModule = createCliAgentModule({
   },
   prepareSession: prepareCursorSession,
   launchScript: (input, imagePaths, settings, session) => cursorLaunchScript(input, imagePaths, settings, session),
-  resumeScript: async (workspaceId, settings, session) => cursorLaunchScript(emptyAgentInput(), [], settings, session, await readCursorChatId(workspaceId, session)),
+  resumeScript: async (_workspaceId, settings, session) => cursorLaunchScript(emptyAgentInput(), [], settings, session),
 });

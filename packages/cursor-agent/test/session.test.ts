@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { cursorMcpAuthorization, cursorRuntimeScript, cursorSessionDirEnv, cursorSessionFiles, cursorSharedHomeScript, acceptCursorChatId, cursorAuthDecision, cursorMcpTokenEnv, cursorPromptReply, cursorSessionStartReply, cursorStopBoundary, cursorStopReply, cursorTurnBoundary, mergeCursorHooks, mergeCursorMcp, parseCursorChatId, parseCursorStopStatus, prepareCursorSession, readCursorChatId, type CursorOwnedHooks } from "../src/server/session.ts";
+import { cursorMcpAuthorization, cursorRuntimeScript, cursorSessionDirEnv, cursorSessionFiles, cursorSharedHomeScript, acceptCursorChatId, cursorAuthDecision, cursorMcpTokenEnv, cursorPromptReply, cursorSessionStartReply, cursorStopBoundary, cursorStopReply, cursorTurnBoundary, mergeCursorHooks, mergeCursorMcp, parseCursorStopStatus, prepareCursorSession, type CursorOwnedHooks } from "../src/server/session.ts";
 
 const sessionId = "11111111-2222-4333-8444-555555555555";
 const relayUrl = "http://127.0.0.1:9/mcp";
@@ -23,11 +23,11 @@ const httpServer = { url: relayUrl, headers: { Authorization: cursorMcpAuthoriza
 const fixtureDir = join(import.meta.dir, "fixtures");
 
 test("chat ids accept only a single UUID line", () => {
-  expect(parseCursorChatId(undefined)).toBeUndefined();
   expect(acceptCursorChatId(`${sessionId}\n`)).toBe(sessionId);
+  expect(acceptCursorChatId(sessionId)).toBe(sessionId);
   expect(() => acceptCursorChatId("-1\n")).toThrow("not a UUID");
   expect(() => acceptCursorChatId("\n")).toThrow("empty");
-  expect(() => parseCursorChatId(`${sessionId}\n\n`)).toThrow("newline");
+  expect(() => acceptCursorChatId(`${sessionId}\n\n`)).toThrow("newline");
 });
 
 test("stop replies finish only completed turns and never ask for a follow-up", () => {
@@ -296,22 +296,4 @@ test("prepareCursorSession returns the pane env and stores the given connection 
   `], { cwd: join(import.meta.dir, ".."), stdout: "pipe", stderr: "pipe" });
   const [code, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
   expect({ code, stdout, stderr }).toEqual({ code: 0, stdout: "", stderr: "" });
-});
-
-test("readCursorChatId reads the workspace-private chat file", async () => {
-  const root = await mkdtemp(join(tmpdir(), "cursor-chat-id-"));
-  const previous = process.env.ATELIER_DATA_DIR;
-  process.env.ATELIER_DATA_DIR = root;
-  try {
-    const session = { id: sessionId, directory: "/vm/session", turnSignalCommand: "/vm/session/turn-signal.sh" };
-    expect(await readCursorChatId("workspace", session)).toBeUndefined();
-    const path = join(root, "workspaces/workspace/home-local/.local/share/agents-in-the-cloud-agents", sessionId, "cursor/chat-id");
-    await mkdir(join(path, ".."), { recursive: true });
-    await writeFile(path, `${sessionId}\n`);
-    expect(await readCursorChatId("workspace", session)).toBe(sessionId);
-  } finally {
-    if (previous === undefined) delete process.env.ATELIER_DATA_DIR;
-    else process.env.ATELIER_DATA_DIR = previous;
-    await rm(root, { recursive: true, force: true });
-  }
 });

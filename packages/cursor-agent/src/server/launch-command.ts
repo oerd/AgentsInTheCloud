@@ -2,33 +2,14 @@ import { shellQuote } from "@agents-in-the-cloud/core";
 import { cliPromptText, type CliAgentSession } from "@agents-in-the-cloud/cli-agent/server";
 import type { AgentWorkspaceParameters, WorkspaceAgentInput } from "@agents-in-the-cloud/shared";
 import { workspaceRoot } from "@agents-in-the-cloud/workspace";
-import { acceptCursorChatId } from "./session.ts";
 
 const installerUrl = "https://cursor.com/install";
-const bannedFlags = new Set(["--print", "-p", "--api-key", "--model", "--continue", "--resume=-1"]);
 
-export function assertCursorLaunchArgs(args: readonly string[]): void {
-  const end = args.indexOf("--");
-  const flags = end === -1 ? args : args.slice(0, end);
-  for (let index = 0; index < flags.length; index++) {
-    const arg = flags[index] ?? "";
-    if (bannedFlags.has(arg) || arg.startsWith("--api-key=") || arg.startsWith("--model=") || arg.startsWith("--print=") || arg.startsWith("--resume=")) {
-      throw new Error(`Cursor launch arg is banned: ${arg}`);
-    }
-    if (arg === "--resume" && flags[index + 1] === "-1") throw new Error("Cursor launch arg is banned: --resume -1");
-  }
-}
-
-export function cursorLaunchScript(input: WorkspaceAgentInput, imagePaths: string[], _settings: AgentWorkspaceParameters, session: CliAgentSession, chatId?: string): string {
-  const resumeId = chatId === undefined ? undefined : acceptCursorChatId(chatId);
+export function cursorLaunchScript(input: WorkspaceAgentInput, imagePaths: string[], _settings: AgentWorkspaceParameters, session: CliAgentSession): string {
   const prompt = cliPromptText(input, imagePaths.map(path => `Read the attached image at ${JSON.stringify(path)}.`));
   const fixed = ["--force", "--approve-mcps", "--sandbox", "disabled"];
   const tail = prompt ? ["--", prompt] : [];
-  const args = [...fixed, ...(resumeId ? ["--resume", resumeId] : []), ...tail];
-  assertCursorLaunchArgs(args);
-  const execArgs = resumeId
-    ? args.map(shellQuote).join(" ")
-    : `${fixed.map(shellQuote).join(" ")} --resume "$chat_id"${tail.length ? ` ${tail.map(shellQuote).join(" ")}` : ""}`;
+  const execArgs = `${fixed.map(shellQuote).join(" ")} '--resume' "$chat_id"${tail.length ? ` ${tail.map(shellQuote).join(" ")}` : ""}`;
   const chatFile = shellQuote(`${session.directory}/cursor/chat-id`);
   const discoverChat = `
 mkdir -p "$(dirname ${chatFile})"
@@ -40,29 +21,41 @@ else
   chat_pid=$!
   ready=0
   i=0
-  while [ "$i" -lt 100 ]; do
-    if [ -s "$chat_tmp" ]; then ready=1; break; fi
-    if ! kill -0 "$chat_pid" 2>/dev/null; then break; fi
+  # 0.1s * 1200: a slow first login can take longer than a few seconds, and a partial write is not an id.
+  while [ "$i" -lt 1200 ]; do
+    if [ -s "$chat_tmp" ] && tail -c 1 "$chat_tmp" | grep -q '^$'; then ready=1; break; fi
+    if ! kill -0 "$chat_pid" 2>/dev/null; then
+      if [ -s "$chat_tmp" ]; then ready=1; fi
+      break
+    fi
     i=$((i + 1))
     sleep 0.1
   done
-  kill -TERM -"$chat_pid" 2>/dev/null || true
-  wait "$chat_pid" 2>/dev/null || true
-  chat_pid=""
   if [ "$ready" -ne 1 ]; then
     printf '%s\\n' 'Cursor create-chat did not print a chat id.' >&2
     exit 1
   fi
-  node "$runtime" accept-chat-id < "$chat_tmp" > ${chatFile}.next
-  mv ${chatFile}.next ${chatFile}
+  if kill -0 "$chat_pid" 2>/dev/null; then
+    kill -TERM -"$chat_pid" 2>/dev/null || true
+    wait "$chat_pid" 2>/dev/null || true
+  fi
+  chat_pid=""
+  chat_next=${chatFile}.next
+  node "$runtime" accept-chat-id < "$chat_tmp" > "$chat_next"
+  mv "$chat_next" ${chatFile}
+  chat_next=""
   chmod 600 ${chatFile}
   chat_id="$(node "$runtime" accept-chat-id < ${chatFile})"
   rm -f "$chat_tmp"
+  chat_tmp=""
 fi`;
   return `set -eu
 failure_message=${shellQuote("\nCursor failed (exit %s). See the error above.\n")}
 chat_pid=""
-trap 'code=$?; if [ -n "$chat_pid" ]; then kill -TERM -"$chat_pid" 2>/dev/null || true; fi; if [ "$code" -ne 0 ]; then printf "$failure_message" "$code"; fi' EXIT
+status_err=""
+chat_tmp=""
+chat_next=""
+trap 'code=$?; if [ -n "$chat_pid" ]; then kill -TERM -"$chat_pid" 2>/dev/null || true; fi; rm -f "$status_err" "$chat_tmp" "$chat_next"; if [ "$code" -ne 0 ]; then printf "$failure_message" "$code"; fi' EXIT
 unset CURSOR_API_KEY
 (
   flock 9
@@ -106,9 +99,10 @@ elif [ "$auth_rc" -ne 0 ]; then
   exit 1
 fi
 rm -f "$status_err"
+status_err=""
 export PATH="$HOME/.local/bin:$PATH"
 cd ${shellQuote(workspaceRoot)}
-${resumeId ? "" : discoverChat}
+${discoverChat}
 # A pipe on this process selects print mode.
 exec "$executable" ${execArgs}
 `;
