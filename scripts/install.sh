@@ -1,8 +1,28 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-system_image=ghcr.io/lucasmeijer/agents-in-the-cloud-system:latest
-app_image=ghcr.io/lucasmeijer/agents-in-the-cloud:latest
+resolve_ghcr_owner() {
+  local owner="${GHCR_OWNER:-}" url=""
+  if [ -z "$owner" ]; then owner="${GITHUB_REPOSITORY_OWNER:-}"; fi
+  if [ -z "$owner" ] && git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    url="$(git remote get-url origin 2>/dev/null || true)"
+    if [[ "$url" =~ ^git@github\.com:([^/]+)/ ]]; then
+      owner="${BASH_REMATCH[1]}"
+    elif [[ "$url" =~ ^https://([^@]+@)?github\.com/([^/]+)/ ]]; then
+      owner="${BASH_REMATCH[2]}"
+    fi
+  fi
+  if [ -z "$owner" ]; then owner="lucasmeijer"; fi
+  owner="$(printf '%s' "$owner" | tr '[:upper:]' '[:lower:]')"
+  if ! [[ "$owner" =~ ^[a-z0-9]([a-z0-9]|-[a-z0-9]){0,38}$ ]]; then
+    printf 'GHCR owner must be a GitHub username.\n' >&2
+    exit 1
+  fi
+  printf '%s' "$owner"
+}
+ghcr_owner="$(resolve_ghcr_owner)"
+system_image="ghcr.io/${ghcr_owner}/agents-in-the-cloud-system:latest"
+app_image="ghcr.io/${ghcr_owner}/agents-in-the-cloud:latest"
 action=""
 uninstall_requested=0
 access_mode=""
@@ -113,21 +133,23 @@ trap 'fail "Installation could not continue. See the bootstrap log for details."
 trap 'fail "Installation interrupted."' INT TERM
 
 usage() {
-  cat <<'HELP'
+  cat <<HELP
 Usage: install.sh [options]
 
 Installs AgentsInTheCloud System, or offers actions for an existing installation.
 System replacements preserve the agents-in-the-cloud-system volume and interrupt workspaces.
 Update also installs the newest AgentsInTheCloud app on the installation's selected channel.
 
-  --system-image REF   System image (default: ghcr.io/lucasmeijer/agents-in-the-cloud-system:latest)
-  --app-image REF      First-install app image (default: ghcr.io/lucasmeijer/agents-in-the-cloud:latest)
+  --system-image REF   System image (default: ${system_image})
+  --app-image REF      First-install app image (default: ${app_image})
   --access-mode MODE  localhost or tailscale (default selected for this machine)
   --action ACTION     install, update, connect, or open
                       connect enables Tailscale without replacing an existing installation
   --uninstall         Permanently delete installation data (also supports Atelier System)
   -h, --help          Show help
 
+The default owner is GHCR_OWNER, then GITHUB_REPOSITORY_OWNER, then the GitHub owner of this checkout, then lucasmeijer.
+Set GHCR_OWNER when the GHCR namespace is not that GitHub owner. A repository variable of the same name overrides it in GitHub Actions.
 The app image is only used when System has no persisted app selection.
 There is no migration from the previous AgentsInTheCloud installation layout.
 HELP

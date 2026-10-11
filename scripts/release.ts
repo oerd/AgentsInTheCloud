@@ -3,10 +3,13 @@ import { appendFileSync, mkdirSync, renameSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { Type } from "typebox";
 import { Value } from "typebox/value";
+import { imageRepository, registryOwnerFrom, resolveRegistryOwner } from "../packages/core/src/ghcr.ts";
 import { authenticateRegistry, commandRunner, ensureBuilders, inspectImage, inspectPlatform, platforms, type Run } from "./release-support.ts";
 import { acquireReleaseLock } from "./release-lock.ts";
 
-const image = "ghcr.io/lucasmeijer/agents-in-the-cloud";
+function upstreamAppImage(): string {
+  return imageRepository(resolveRegistryOwner(), "app");
+}
 const root = resolve(import.meta.dir, "..");
 export const usage = `Release AgentsInTheCloud from the current origin/main commit.
 
@@ -43,7 +46,7 @@ export interface ReleaseStatus {
 }
 const preloadSchema = Type.Array(Type.String({ pattern: "@sha256:[a-f0-9]{64}$" }), { minItems: 1 });
 
-export async function verifyRevision(run: Run, ref: string, commit: string): Promise<string> {
+export async function verifyRevision(run: Run, ref: string, commit: string, image = upstreamAppImage()): Promise<string> {
   const manifest = (await inspectImage(run, ref))!;
   const dependencies = new Set<string>();
   for (const platform of platforms) {
@@ -59,7 +62,7 @@ export async function verifyRevision(run: Run, ref: string, commit: string): Pro
   return manifest.digest;
 }
 
-export async function promoteChannels(run: Run, status: ReleaseStatus, save: () => void): Promise<void> {
+export async function promoteChannels(run: Run, status: ReleaseStatus, save: () => void, image = upstreamAppImage()): Promise<void> {
   for (const channel of ["latest", "stable"] as const) {
     if (status.channels[channel] === undefined) continue;
     status.phase = `Promote ${channel}`;
@@ -84,6 +87,9 @@ export async function release(options: ReturnType<typeof parseReleaseArgs>, run:
   const phase = (text: string) => { status.phase = text; save(); };
   phase("Resolve origin/main");
   await run(["git", "fetch", "origin", "refs/heads/main"]);
+  const origin = await run(["git", "remote", "get-url", "origin"], { allowFailure: true });
+  const owner = registryOwnerFrom(process.env, origin.code === 0 ? origin.stdout.trim() : undefined);
+  const image = imageRepository(owner, "app");
   status.commit = (await run(["git", "rev-parse", "FETCH_HEAD^{commit}"])).stdout.trim();
   save();
   phase("Check local and SSH native builders");
@@ -97,7 +103,7 @@ export async function release(options: ReturnType<typeof parseReleaseArgs>, run:
   }
 
   phase("Authenticate registry");
-  await authenticateRegistry(run);
+  await authenticateRegistry(run, owner);
   const ref = `${image}:sha-${status.commit}`;
   phase("Look for an existing commit image");
   if (!await inspectImage(run, ref, true)) {
@@ -106,19 +112,18 @@ export async function release(options: ReturnType<typeof parseReleaseArgs>, run:
     await run(["git", "worktree", "add", "--detach", checkout, status.commit]);
     try {
       phase("Build and upload commit images (no channel updates)");
-      await run(["bun", join(root, "scripts/build-agents-in-the-cloud-image.ts"), "--push", "--no-latest", "--tag", `sha-${status.commit}`, "--builder", builders.local, "--helper-context", builders.remote, "--native-platform", builders.nativePlatform, "--platform", platforms.join(","), "--progress", "plain"], { cwd: checkout, stream: true });
+      await run(["bun", join(root, "scripts/build-agents-in-the-cloud-image.ts"), "--push", "--no-latest", "--image", image, "--tag", `sha-${status.commit}`, "--builder", builders.local, "--helper-context", builders.remote, "--native-platform", builders.nativePlatform, "--platform", platforms.join(","), "--progress", "plain"], { cwd: checkout, stream: true });
     } finally {
       await run(["git", "worktree", "remove", "--force", checkout]);
     }
   }
   phase("Verify both architectures and revision labels");
-  status.digest = await verifyRevision(run, ref, status.commit);
+  status.digest = await verifyRevision(run, ref, status.commit, image);
   save();
-  // Avoid promoting a build that was overtaken by new main branch commits while building.
   phase("Confirm main branch has not moved");
   const head = (await run(["git", "ls-remote", "origin", "refs/heads/main"])).stdout.split(/\s+/)[0];
   if (head !== status.commit) throw new Error("origin/main moved during this release. Commit image is uploaded; rerun to release the new branch head.");
-  await promoteChannels(run, status, save);
+  await promoteChannels(run, status, save, image);
   status.state = "published";
   phase(`Published ${Object.keys(status.channels).join(" + ")} — ${status.digest}`);
 }

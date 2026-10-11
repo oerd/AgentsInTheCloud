@@ -72,7 +72,7 @@ test("promotion fails if registry readback differs", async () => {
   expect(current.channels.latest).toBe("failed");
 });
 
-async function scenario(options: { check?: boolean; exists?: boolean; moved?: boolean; buildFailure?: boolean; sameArch?: boolean; localArm?: boolean; badDriver?: boolean; missingHelper?: boolean }) {
+async function scenario(options: { check?: boolean; exists?: boolean; moved?: boolean; buildFailure?: boolean; sameArch?: boolean; localArm?: boolean; badDriver?: boolean; missingHelper?: boolean; owner?: string }) {
   const directory = mkdtempSync(join(tmpdir(), "agents-in-the-cloud-release-test-"));
   const calls: { args: string[]; cwd?: string }[] = [];
   let uploaded = options.exists ?? false;
@@ -84,6 +84,9 @@ async function scenario(options: { check?: boolean; exists?: boolean; moved?: bo
   else process.env.ATELIER_RELEASE_HELPER = "builder@helper";
   const oldToken = process.env.GH_PACKAGE_TOKEN;
   process.env.GH_PACKAGE_TOKEN = "test-not-a-real-credential";
+  const oldOwner = process.env.GHCR_OWNER;
+  if (options.owner === undefined) delete process.env.GHCR_OWNER;
+  else process.env.GHCR_OWNER = options.owner;
   try {
     const run: Run = async (args, command) => {
       calls.push({ args, cwd: command?.cwd });
@@ -119,6 +122,8 @@ async function scenario(options: { check?: boolean; exists?: boolean; moved?: bo
     else process.env.ATELIER_RELEASE_HELPER = oldHelper;
     if (oldToken === undefined) delete process.env.GH_PACKAGE_TOKEN;
     else process.env.GH_PACKAGE_TOKEN = oldToken;
+    if (oldOwner === undefined) delete process.env.GHCR_OWNER;
+    else process.env.GHCR_OWNER = oldOwner;
     rmSync(directory, { recursive: true, force: true });
   }
 }
@@ -157,6 +162,19 @@ test("new commit is built in an isolated checkout with no latest tag before veri
   expect(build.args).toContain("--builder");
   expect(calls.some(({ args }) => args.includes("--stable"))).toBe(false);
   expect(calls.findIndex(({ args }) => args.includes("{{json .Image}}"))).toBeLessThan(calls.findIndex(({ args }) => args.includes("--tag") && args.includes("ghcr.io/lucasmeijer/agents-in-the-cloud:latest")));
+});
+
+test("GHCR_OWNER publishes that owner's app image and logs in as that user", async () => {
+  const { calls, error } = await scenario({ owner: "oerd" });
+  expect(error).toBeUndefined();
+  const login = calls.find(({ args }) => args.includes("login"));
+  expect(login?.args).toContain("--username");
+  expect(login?.args).toContain("oerd");
+  const build = calls.find(({ args }) => args[0] === "bun");
+  expect(build?.args).toContain("--image");
+  expect(build?.args).toContain("ghcr.io/oerd/agents-in-the-cloud");
+  expect(calls.some(({ args }) => args.includes("ghcr.io/oerd/agents-in-the-cloud:latest"))).toBe(true);
+  expect(calls.some(({ args }) => args.includes("ghcr.io/lucasmeijer/agents-in-the-cloud:latest"))).toBe(false);
 });
 
 test("retry reuses uploaded commit instead of rebuilding", async () => {

@@ -18,6 +18,8 @@ jobs:
   publish:
     if: github.ref == 'refs/heads/rename-agents-in-the-cloud'
     runs-on: ubuntu-latest
+    env:
+      GHCR_OWNER: ${{ vars.GHCR_OWNER }}
     steps:
       - uses: actions/checkout@v4
 
@@ -32,7 +34,8 @@ jobs:
           context="$RUNNER_TEMP/workspace-image"
           bun packages/workspace-image/scripts/build-context.mjs "$context"
           tag=$(jq -er '.tag | select(startswith("agents-in-the-cloud-workspace:")) | ltrimstr("agents-in-the-cloud-workspace:")' "$context/metadata.json")
-          repository="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/agents-in-the-cloud-workspace"
+          owner=$(bun -e 'import { registryOwnerFrom } from "./packages/core/src/ghcr.ts"; process.stdout.write(registryOwnerFrom(Bun.env));')
+          repository="ghcr.io/${owner}/agents-in-the-cloud-workspace"
           {
             echo "context=$context"
             echo "ref=$repository:$tag"

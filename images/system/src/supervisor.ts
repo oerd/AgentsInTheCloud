@@ -16,6 +16,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
 import { chmod, chown, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { uninstallManagedResources, uninstallPlan, uninstallSocketPath, type UninstallState } from "./uninstall.ts";
+import { channelRepository, ghcrRepository, imageRepository, ownerFromRepository, resolveRegistryOwner, selectAppRepository } from "../../../packages/core/src/ghcr.ts";
 import { parseArgs } from "node:util";
 import { command, docker, sleep, stopCommands } from "./process.ts";
 import { TailscaleHttps, TailscaleCertificateError } from "./tailscale-https.ts";
@@ -28,7 +29,7 @@ const { values } = parseArgs({
     "access-mode": { type: "string", default: "tailscale" },
     "app-image": {
       type: "string",
-      default: "ghcr.io/lucasmeijer/agents-in-the-cloud:latest",
+      default: `${imageRepository(resolveRegistryOwner({ ghcrOwner: process.env.GHCR_OWNER }), "app")}:latest`,
     },
   },
   strict: true,
@@ -47,8 +48,7 @@ await Promise.all(
 );
 await mkdir("/run/agents-in-the-cloud-system", { recursive: true });
 await writeFile("/run/agents-in-the-cloud-system/access-v1", "");
-// Retain the serialized accessMode field and external access API spelling.
-type State = { accessMode?: "localhost" | "tailscale"; localPort?: number; currentImage?: string; runningContainers?: string[]; uninstall?: UninstallState };
+type State = { accessMode?: "localhost" | "tailscale"; localPort?: number; currentImage?: string; appRepository?: string; runningContainers?: string[]; uninstall?: UninstallState };
 const persisted: State = (await Bun.file(`${stateDir}/state.json`).exists())
   ? JSON.parse(await readFile(`${stateDir}/state.json`, "utf8"))
   : {};
@@ -57,6 +57,10 @@ const tailscaleSelected = () => persisted.accessMode === "tailscale";
 async function persist() {
   await writeFile(`${stateDir}/state.next`, JSON.stringify(persisted));
   await rename(`${stateDir}/state.next`, `${stateDir}/state.json`);
+}
+if (!persisted.appRepository || ghcrRepository(persisted.appRepository) !== persisted.appRepository) {
+  persisted.appRepository = selectAppRepository({ appImage: values["app-image"], ghcrOwner: process.env.GHCR_OWNER });
+  await persist();
 }
 if (persisted.uninstall?.state === "running") {
   persisted.uninstall = { state: "failed", description: "Uninstall was interrupted. Run --uninstall again to finish removing the installation." };
@@ -267,7 +271,7 @@ async function replace(request: Replacement) {
       ? await prepareChannelUpdate("/data/app/update.json", {
           pull: (reference) => pullImage(reference, "Downloading AgentsInTheCloud from the selected channel"),
           inspect: (reference) => docker("image", "inspect", "--format", "{{.Id}}", reference),
-        })
+        }, channelRepository({ remembered: persisted.appRepository, ghcrOwner: process.env.GHCR_OWNER }))
       : request.image;
     candidate = reference;
     const exact = await prepareImage(reference, {
@@ -309,6 +313,8 @@ async function replace(request: Replacement) {
       "type=bind,src=/run/agents-in-the-cloud-system/access-v1,dst=/run/agents-in-the-cloud-system/access-v1,readonly",
       "--label",
       "agents-in-the-cloud.role=app",
+      "--env",
+      `GHCR_OWNER=${ownerFromRepository(persisted.appRepository ?? selectAppRepository({ ghcrOwner: process.env.GHCR_OWNER }))}`,
       "--mount",
       "type=bind,src=/data/app,dst=/data/app",
       "--mount",
