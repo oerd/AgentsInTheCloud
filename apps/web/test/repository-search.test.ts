@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseAtlassianAccountEmail, setForgeAccount } from "@agents-in-the-cloud/core";
 import { shouldSearchRepositories } from "@agents-in-the-cloud/shared";
-import { repositorySearchIsRateLimited, searchRepositories, type RepositoryHit, type RepositorySearchResults } from "../src/server/repository-search.ts";
+import { directRepositorySearchResults, repositorySearchIsRateLimited, searchRepositories, type RepositoryHit, type RepositorySearchResults } from "../src/server/repository-search.ts";
 
 const originalFetch = globalThis.fetch;
 let previousDataDir: string | undefined;
@@ -92,6 +92,26 @@ test("explicit forge URLs bypass search while repository names remain searchable
   expect(shouldSearchRepositories("bitbucket.org/workspace/repo")).toBe(false);
   expect(shouldSearchRepositories(" Bitbucket.org/workspace/repo#main ")).toBe(false);
   expect(shouldSearchRepositories("Hello-World")).toBe(true);
+});
+
+test("direct forge URLs become one exact repository result", () => {
+  expect(directRepositorySearchResults(" bitbucket.org/gripable/able-backend#main ")).toEqual({
+    groups: [{
+      forge: "bitbucket",
+      heading: "Bitbucket repository",
+      repositories: [{
+        forge: "bitbucket",
+        fullName: "gripable/able-backend",
+        description: null,
+        private: false,
+        cloneUrl: "https://bitbucket.org/gripable/able-backend#main",
+        personal: true,
+      }],
+      attempted: false,
+    }],
+  });
+  expect(directRepositorySearchResults("https://example.com/gripable/able-backend")).toBeUndefined();
+  expect(directRepositorySearchResults("https://bitbucket.org/gripable/able-backend/issues")).toBeUndefined();
 });
 
 test("owner-scoped search puts personal and org repos first, including public ones, and deduplicates", async () => {

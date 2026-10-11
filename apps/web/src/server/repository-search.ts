@@ -2,7 +2,8 @@ import { createHash } from "node:crypto";
 import { contentRowHtml } from "@agents-in-the-cloud/design-system/content-row";
 import { autocompleteHtml } from "@agents-in-the-cloud/design-system/autocomplete";
 import { discoverForgeAccounts, type ForgeAccount, type ForgeId } from "@agents-in-the-cloud/core";
-import { escapeHtml } from "@agents-in-the-cloud/shared";
+import { cloudForge, cloudForges, isSchemeLessCloudForgeSpec } from "@agents-in-the-cloud/core/cloud-forges";
+import { escapeHtml, providerBrandIconHtml } from "@agents-in-the-cloud/shared";
 import { Type, type Static, type TSchema } from "typebox";
 import { bitbucketBasicAuthorization, decodeResponseJson } from "./forge-http.ts";
 
@@ -122,6 +123,47 @@ function bitbucketCloneUrl(fullName: string, links: { clone?: { name?: string; h
 function bitbucketNameQuery(query: string): string {
   const escaped = query.replace(/\r\n|[\r\n]/g, " ").replace(/\\/g, "\\\\").replace(/"/g, '\\"');
   return `name~"${escaped}"`;
+}
+
+export function directRepositorySearchResults(query: string): RepositorySearchResults | undefined {
+  const trimmed = query.trim();
+  const normalized = isSchemeLessCloudForgeSpec(trimmed) ? `https://${trimmed}` : trimmed;
+  let url: URL;
+  try {
+    url = new URL(normalized);
+  } catch {
+    return undefined;
+  }
+  const forge = cloudForges.find((candidate) => candidate.gitHost === url.hostname.toLowerCase());
+  if (!forge || (url.protocol !== "http:" && url.protocol !== "https:")) return undefined;
+  let parts: string[];
+  try {
+    parts = url.pathname.split("/").filter(Boolean).map(decodeURIComponent);
+  } catch {
+    return undefined;
+  }
+  if (parts.length !== 2) return undefined;
+  const owner = parts[0]!;
+  const repository = parts[1]!.endsWith(".git") ? parts[1]!.slice(0, -4) : parts[1]!;
+  if (!owner || !repository || [owner, repository].some((part) => /[\s/]/.test(part))) return undefined;
+  url.protocol = "https:";
+  url.username = "";
+  url.password = "";
+  return {
+    groups: [{
+      forge: forge.id,
+      heading: `${forge.label} repository`,
+      repositories: [{
+        forge: forge.id,
+        fullName: `${owner}/${repository}`,
+        description: null,
+        private: false,
+        cloneUrl: url.toString(),
+        personal: true,
+      }],
+      attempted: false,
+    }],
+  };
 }
 
 function retryAfterSeconds(response: Response): number | undefined {
@@ -381,6 +423,7 @@ export function renderRepositorySearchMenu(results: RepositorySearchResults): st
           width: "fill",
           kind: "compact",
           label: { kind: "text", text: repo.fullName },
+          leadingHtml: providerBrandIconHtml(repo.forge, cloudForge(repo.forge).label),
           trailingHtml: repo.private ? "<span>Private</span>" : undefined,
           element: {
             tag: "button",

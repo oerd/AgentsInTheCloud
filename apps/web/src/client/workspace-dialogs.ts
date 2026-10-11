@@ -2,7 +2,7 @@ import { Controller } from "@hotwired/stimulus";
 import { createHtmlAutocompleteController, PromptHistoryNavigator } from "@agents-in-the-cloud/agent/client";
 import { composerViewportHeight, focusComposerText, revealComposerCaret, sizeComposer } from "@agents-in-the-cloud/prompt/client";
 import { autocompleteHtml } from "@agents-in-the-cloud/design-system/autocomplete";
-import { changeLayout, composerSubmitKey, focusLikelyOpensSoftwareKeyboard, isWorkspacePaneVisible, shouldSearchRepositories, softwareKeyboardArranged } from "@agents-in-the-cloud/shared";
+import { changeLayout, composerSubmitKey, focusLikelyOpensSoftwareKeyboard, isWorkspacePaneVisible, softwareKeyboardArranged } from "@agents-in-the-cloud/shared";
 import { Type } from "typebox";
 import { Value } from "typebox/value";
 import { submitFormWithFirstButton } from "./form-submission.ts";
@@ -200,7 +200,7 @@ const WorkspaceTemplateRepositorySearchController = createHtmlAutocompleteContro
   explicitSearch: true,
   request(input) {
     const query = input.value.trim();
-    return shouldSearchRepositories(query) ? { query } : undefined;
+    return query.length >= 2 ? { query } : undefined;
   },
   select(option, input) {
     const gitUrl = option.dataset.gitUrl!;

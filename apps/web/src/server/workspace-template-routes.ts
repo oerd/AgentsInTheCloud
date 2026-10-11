@@ -20,7 +20,7 @@ import {
 import { shouldSearchRepositories, turboStreamResponse } from "@agents-in-the-cloud/shared";
 import { Type } from "typebox";
 import { Value } from "typebox/value";
-import { renderRepositorySearchMenu, renderRepositorySearchRateLimitMenu, repositorySearchIsRateLimited, searchRepositories } from "./repository-search.ts";
+import { directRepositorySearchResults, renderRepositorySearchMenu, renderRepositorySearchRateLimitMenu, repositorySearchIsRateLimited, searchRepositories } from "./repository-search.ts";
 import { jsonResponse, matchRoute, replace, response, textResponse, update, wantsStream } from "@agents-in-the-cloud/shared/http";
 
 const jsonStringSchema = Type.String();
@@ -362,6 +362,8 @@ export function createWorkspaceTemplateRoutes(deps: {
 
   async function repositorySearchEndpoint(url: URL): Promise<Response> {
     const query = url.searchParams.get("q") ?? "";
+    const direct = directRepositorySearchResults(query);
+    if (direct) return response(renderRepositorySearchMenu(direct));
     if (!shouldSearchRepositories(query)) return response("");
     const results = await searchRepositories(query);
     const limited = repositorySearchIsRateLimited(results);
