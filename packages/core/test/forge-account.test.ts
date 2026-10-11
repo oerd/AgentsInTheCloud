@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -227,6 +227,25 @@ describe("forge accounts", () => {
     expect(await runCredentialHelper("protocol=https\nhost=example.com\n\n", env)).toBe("");
     expect(await runCredentialHelper("protocol=ssh\nhost=bitbucket.org\n\n", env)).toBe("");
     expect(await runCredentialHelper("protocol=https\nhost=Bitbucket.org\n\n", env)).toBe("");
+  });
+
+  test("git env clears host tokens when that forge is disconnected", () => {
+    process.env.GH_TOKEN = "host-gh";
+    process.env.BKT_TOKEN = "host-bkt";
+    clearForgeAccount("github");
+
+    const merged = { ...process.env, ...forgeGitEnv(discoverForgeAccounts()) };
+    expect(merged.GH_TOKEN).toBe("");
+    expect(merged.BKT_TOKEN).toBe("");
+  });
+
+  test("disconnecting Bitbucket deletes the account and leaves no disable marker", () => {
+    bitbucketAccount("ada@example.com", "token");
+    clearForgeAccount("bitbucket");
+
+    expect(existsSync(join(dataDir, "workspace", "bitbucket-account"))).toBe(false);
+    expect(existsSync(join(dataDir, "workspace", "bitbucket-account-disabled"))).toBe(false);
+    expect(discoverForgeAccount("bitbucket")).toBeUndefined();
   });
 
   test("host git env carries tokens and Bitbucket plain env carries the email", () => {

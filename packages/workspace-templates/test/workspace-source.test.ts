@@ -213,6 +213,36 @@ describe("workspace source preparation", () => {
     expect(tokens.every((token) => token === "stored-token")).toBe(true);
   });
 
+  test("a disconnected forge does not pass a host token to git", async () => {
+    const fixture = await createRemote();
+    tempRoots.push(fixture.root);
+    const realGit = (await run(["which", "git"])).stdout.trim();
+    const fakeBin = await mkdtemp(join(tmpdir(), "agents-in-the-cloud-fake-git-"));
+    tempRoots.push(fakeBin);
+    const tokenLog = join(fakeBin, "tokens.log");
+    const fakeGit = join(fakeBin, "git");
+    await writeFile(fakeGit, `#!/bin/sh\nprintf '%s\\n' "GH=\${GH_TOKEN-} BKT=\${BKT_TOKEN-}" >> ${JSON.stringify(tokenLog)}\nexec ${JSON.stringify(realGit)} "$@"\n`);
+    await chmod(fakeGit, 0o755);
+    const previousPath = process.env.PATH;
+    const previousBitbucketToken = process.env.BKT_TOKEN;
+    process.env.PATH = `${fakeBin}:${previousPath ?? ""}`;
+    process.env.GH_TOKEN = "host-gh";
+    process.env.BKT_TOKEN = "host-bkt";
+    clearForgeAccount("github");
+    try {
+      await prepareWorkspaceSource({ workspaceId: "ws-disconnected-token", gitUrl: fixture.remote, branch: "main" });
+    } finally {
+      if (previousPath === undefined) delete process.env.PATH;
+      else process.env.PATH = previousPath;
+      if (previousBitbucketToken === undefined) delete process.env.BKT_TOKEN;
+      else process.env.BKT_TOKEN = previousBitbucketToken;
+    }
+
+    const tokens = (await Bun.file(tokenLog).text()).trim().split("\n");
+    expect(tokens.length).toBeGreaterThan(0);
+    expect(tokens.every((token) => token === "GH= BKT=")).toBe(true);
+  });
+
   test("initializes nested submodules recursively in the reusable template and workspace", async () => {
     const leaf = await createRemote();
     const middle = await createRemote();

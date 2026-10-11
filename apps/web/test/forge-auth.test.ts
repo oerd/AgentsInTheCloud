@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { parseAtlassianAccountEmail, setForgeAccount } from "@agents-in-the-cloud/core";
 import { validateForgeAccount } from "../src/server/forge-auth.ts";
-import { renderForgeSection } from "../src/server/settings/git-host.ts";
+import { handleForgeSettingsRequest, renderForgeSection } from "../src/server/settings/git-host.ts";
 import { createWorkspaceTemplateRoutes } from "../src/server/workspace-template-routes.ts";
 
 const originalFetch = globalThis.fetch;
@@ -223,6 +223,31 @@ describe("forge auth", () => {
         createAgentWorkspace: () => Promise.resolve(new Response()),
       }).editorHtml({ kind: "new" });
       expect(connected).toContain("search GitHub and Bitbucket.");
+    } finally {
+      if (previous === undefined) delete process.env.ATELIER_DATA_DIR;
+      else process.env.ATELIER_DATA_DIR = previous;
+      await rm(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  test("connecting Bitbucket from Settings does not open Connect GitHub", async () => {
+    const previous = process.env.ATELIER_DATA_DIR;
+    const dataDir = await mkdtemp(join(tmpdir(), "agents-in-the-cloud-bitbucket-onboarding-"));
+    process.env.ATELIER_DATA_DIR = dataDir;
+    globalThis.fetch = fetchStub((url) => {
+      if (String(url).startsWith("https://api.bitbucket.org/2.0/repositories")) return Promise.resolve(Response.json({ values: [] }));
+      return Promise.resolve(Response.json({ display_name: "Ada Lovelace" }));
+    });
+    try {
+      const request = new Request("http://127.0.0.1:3000/settings/bitbucket/connect", {
+        method: "POST",
+        headers: { "content-type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({ email: "ada@example.com", token: "api-token" }),
+      });
+      const response = await handleForgeSettingsRequest(request, new URL(request.url));
+      const html = await response?.text();
+      expect(html).toContain("settings-sec-bitbucket");
+      expect(html).not.toContain("Connect GitHub");
     } finally {
       if (previous === undefined) delete process.env.ATELIER_DATA_DIR;
       else process.env.ATELIER_DATA_DIR = previous;

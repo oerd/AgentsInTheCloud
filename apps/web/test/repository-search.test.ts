@@ -272,6 +272,70 @@ test("a Bitbucket service error is not cached", async () => {
   expect(bitbucketCalls).toBe(2);
 });
 
+test("an empty GitHub search does not turn a Bitbucket rate limit into a menu rate limit", async () => {
+  connectBitbucket();
+  globalThis.fetch = Object.assign(async (input: Parameters<typeof fetch>[0]) => {
+    const url = new URL(String(input));
+    if (url.hostname === "api.bitbucket.org") return new Response("slow", { status: 429, headers: { "retry-after": "12" } });
+    if (url.pathname === "/user") return Response.json({ login: "me" });
+    if (url.pathname === "/user/orgs") return Response.json([]);
+    return Response.json({ items: [] });
+  }, { preconnect: originalFetch.preconnect });
+
+  const results = await searchRepositories("empty-bb-limited");
+  expect(repositorySearchIsRateLimited(results)).toBeUndefined();
+  expect(notice(results, "Your Bitbucket repositories")).toContain("Bitbucket is rate limited");
+});
+
+test("a bad GitHub user response keeps Bitbucket results", async () => {
+  connectBitbucket();
+  globalThis.fetch = Object.assign(async (input: Parameters<typeof fetch>[0]) => {
+    const url = new URL(String(input));
+    if (url.hostname === "api.bitbucket.org") return Response.json({ values: [{ full_name: "team/kept", is_private: false }] });
+    if (url.pathname === "/user") return Response.json({ login: 1 });
+    if (url.pathname === "/user/orgs") return Response.json([]);
+    return Response.json({ items: [repository("public/kept")] });
+  }, { preconnect: originalFetch.preconnect });
+
+  const results = await searchRepositories("kept-user");
+  expect(repositoriesIn(results).map((repo) => repo.fullName)).toContain("team/kept");
+  expect(repositoriesIn(results).map((repo) => repo.fullName)).toContain("public/kept");
+  expect(notice(results, "Your GitHub repositories")).toContain("could not be searched");
+});
+
+test("an invalid GitHub clone URL is an error", async () => {
+  globalThis.fetch = Object.assign(async (input: Parameters<typeof fetch>[0]) => {
+    const url = new URL(String(input));
+    if (url.pathname === "/user") return Response.json({ login: "me" });
+    if (url.pathname === "/user/orgs") return Response.json([]);
+    return Response.json({ items: [{ full_name: "me/bad", description: null, private: false, clone_url: "not a url" }] });
+  }, { preconnect: originalFetch.preconnect });
+
+  await expect(searchRepositories("bad-clone-url")).rejects.toBeInstanceOf(TypeError);
+});
+
+test("Bitbucket repositories are listed with personal results before public GitHub", async () => {
+  connectBitbucket();
+  globalThis.fetch = Object.assign(async (input: Parameters<typeof fetch>[0]) => {
+    const url = new URL(String(input));
+    if (url.hostname === "api.bitbucket.org") {
+      return Response.json({ values: [{ full_name: "team/mine", is_private: true }] });
+    }
+    if (url.pathname === "/user") return Response.json({ login: "me" });
+    if (url.pathname === "/user/orgs") return Response.json([]);
+    const query = url.searchParams.get("q") ?? "";
+    const items = query.includes("user:") ? [repository("me/mine")] : [repository("public/other")];
+    return Response.json({ items });
+  }, { preconnect: originalFetch.preconnect });
+
+  const results = await searchRepositories("personal-order");
+  expect(results.groups.map((group) => group.heading)).toEqual([
+    "Your GitHub repositories",
+    "Your Bitbucket repositories",
+    "Public GitHub repositories",
+  ]);
+});
+
 test("omits Bitbucket when no account is stored", async () => {
   stubSearch(() => [repository("public/widget")]);
   const results = await searchRepositories("no-bitbucket");
