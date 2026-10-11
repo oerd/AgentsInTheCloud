@@ -19,7 +19,6 @@ export type BitbucketForge = {
   readonly gitUsername: "x-bitbucket-api-token-auth";
   readonly tokenEnv: "BKT_TOKEN";
   readonly storeFile: "bitbucket-account";
-  readonly disabledFile: "bitbucket-account-disabled";
   readonly plainEnv: readonly [
     { readonly name: "BKT_HOST"; readonly literal: "https://bitbucket.org" },
     { readonly name: "BKT_USERNAME"; readonly field: "email" },
@@ -50,7 +49,6 @@ export const cloudForges: readonly [GitHubForge, BitbucketForge] = [
     gitUsername: "x-bitbucket-api-token-auth",
     tokenEnv: "BKT_TOKEN",
     storeFile: "bitbucket-account",
-    disabledFile: "bitbucket-account-disabled",
     plainEnv: [
       { name: "BKT_HOST", literal: "https://bitbucket.org" },
       { name: "BKT_USERNAME", field: "email" },

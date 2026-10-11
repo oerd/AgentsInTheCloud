@@ -4,7 +4,7 @@ import { autocompleteHtml } from "@agents-in-the-cloud/design-system/autocomplet
 import { discoverForgeAccounts, type ForgeAccount, type ForgeId } from "@agents-in-the-cloud/core";
 import { escapeHtml } from "@agents-in-the-cloud/shared";
 import { Type, type Static, type TSchema } from "typebox";
-import { ParseError, Value } from "typebox/value";
+import { bitbucketBasicAuthorization, decodeResponseJson } from "./forge-http.ts";
 
 export interface RepositoryHit {
   readonly forge: ForgeId;
@@ -120,6 +120,15 @@ function retryAfterSeconds(response: Response): number | undefined {
   return Number(response.headers.get("retry-after") ?? undefined) || undefined;
 }
 
+async function fetchSearch(url: URL, init?: RequestInit): Promise<Response> {
+  try {
+    return await fetch(url, init);
+  } catch (error) {
+    if (error instanceof TypeError) throw new RepositorySearchRejectedError(error.message);
+    throw error;
+  }
+}
+
 async function fetchGitHub(url: URL, token: string | undefined): Promise<Response> {
   const headers: HeadersInit = {
     Accept: "application/vnd.github+json",
@@ -127,7 +136,7 @@ async function fetchGitHub(url: URL, token: string | undefined): Promise<Respons
   };
   if (token) headers.Authorization = `Bearer ${token}`;
 
-  const response = await fetch(url, { headers });
+  const response = await fetchSearch(url, { headers });
   if (!response.ok) {
     const message = await response.text();
     if (response.status === 429 || (response.status === 403 && (response.headers.get("x-ratelimit-remaining") === "0" || /rate limit/i.test(message)))) {
@@ -143,13 +152,13 @@ async function repositoryOwners(token: string): Promise<string[]> {
   const cached = ownerCache.get(key);
   if (cached && cached.expiresAt > Date.now()) return cached.owners;
   const userSchema = Type.Object({ login: Type.String() });
-  const user = Value.Parse(userSchema, await (await fetchGitHub(new URL("https://api.github.com/user"), token)).json());
+  const user = await readSearchBody(await fetchGitHub(new URL("https://api.github.com/user"), token), userSchema, "GitHub account lookup returned an unreadable response.");
   const owners = [user.login];
   for (let page = 1; ; page++) {
     const url = new URL("https://api.github.com/user/orgs");
     url.searchParams.set("per_page", "100");
     url.searchParams.set("page", String(page));
-    const orgs = Value.Parse(Type.Array(userSchema), await (await fetchGitHub(url, token)).json());
+    const orgs = await readSearchBody(await fetchGitHub(url, token), Type.Array(userSchema), "GitHub account lookup returned an unreadable response.");
     owners.push(...orgs.map((org) => org.login));
     if (orgs.length < 100) break;
   }
@@ -182,19 +191,9 @@ function caughtPage(error: RepositorySearchRateLimitError | RepositorySearchReje
 }
 
 async function readSearchBody<Schema extends TSchema>(response: Response, schema: Schema, message: string): Promise<Static<Schema>> {
-  let encoded: unknown;
-  try {
-    encoded = await response.json();
-  } catch (error) {
-    if (error instanceof SyntaxError) throw new RepositorySearchRejectedError(message);
-    throw error;
-  }
-  try {
-    return Value.Parse(schema, encoded);
-  } catch (error) {
-    if (error instanceof ParseError) throw new RepositorySearchRejectedError(message);
-    throw error;
-  }
+  const body = await decodeResponseJson(response, schema);
+  if (!body) throw new RepositorySearchRejectedError(message);
+  return body;
 }
 
 async function githubPersonalPage(query: string, token: string | undefined): Promise<PageOutcome> {
@@ -207,7 +206,6 @@ async function githubPersonalPage(query: string, token: string | undefined): Pro
     const repositories = await searchGitHubRepositoryPage(`${query} ${owners.map((owner) => `user:${owner}`).join(" ")}`, token, true);
     return remember(key, { kind: "hits", repositories });
   } catch (error) {
-    if (error instanceof TypeError) return { kind: "notice", notice: "Your repositories could not be searched. Check your GitHub connection and organization access.", attempted: true };
     if (error instanceof RepositorySearchRateLimitError || error instanceof RepositorySearchRejectedError) {
       return caughtPage(
         error,
@@ -227,7 +225,6 @@ async function githubPublicPage(query: string, token: string | undefined): Promi
     const repositories = await searchGitHubRepositoryPage(`${query} is:public`, token, false);
     return remember(key, { kind: "hits", repositories });
   } catch (error) {
-    if (error instanceof TypeError) return { kind: "notice", notice: "Public repositories could not be searched. Check your GitHub connection.", attempted: true };
     if (error instanceof RepositorySearchRateLimitError || error instanceof RepositorySearchRejectedError) {
       return caughtPage(
         error,
@@ -251,24 +248,23 @@ async function bitbucketPersonalPage(query: string, account: Extract<ForgeAccoun
   url.searchParams.set("q", bitbucketNameQuery(query));
   let response: Response;
   try {
-    response = await fetch(url, {
+    response = await fetchSearch(url, {
       headers: {
         Accept: "application/json",
-        Authorization: `Basic ${Buffer.from(`${account.email}:${account.token}`).toString("base64")}`,
+        Authorization: bitbucketBasicAuthorization(account.email, account.token),
       },
     });
   } catch (error) {
-    if (error instanceof TypeError) return { kind: "notice", notice: rejected, attempted: true };
+    if (error instanceof RepositorySearchRejectedError) return { kind: "notice", notice: rejected, attempted: true };
     throw error;
   }
-  if (response.status === 429) return caughtPage(new RepositorySearchRateLimitError("Bitbucket repository search was rate limited.", retryAfterSeconds(response)), rejected, limited);
-  if (response.status === 401 || response.status === 403) return caughtPage(new RepositorySearchRejectedError("Bitbucket rejected the account."), rejected, limited);
-  if (!response.ok) return caughtPage(new RepositorySearchRejectedError(`Bitbucket repository search failed: ${response.status}`), rejected, limited);
+  if (response.status === 429) return { kind: "notice", notice: limited, attempted: true, rateLimit: { retryAfterSeconds: retryAfterSeconds(response) } };
+  if (!response.ok) return { kind: "notice", notice: rejected, attempted: true };
   let body: Static<typeof bitbucketRepositorySearchResponseSchema>;
   try {
     body = await readSearchBody(response, bitbucketRepositorySearchResponseSchema, "Bitbucket repository search returned an unreadable response.");
   } catch (error) {
-    if (error instanceof RepositorySearchRejectedError) return caughtPage(error, rejected, limited);
+    if (error instanceof RepositorySearchRejectedError) return { kind: "notice", notice: rejected, attempted: true };
     throw error;
   }
   const repositories = body.values.map((repo) => ({
@@ -282,28 +278,22 @@ async function bitbucketPersonalPage(query: string, account: Extract<ForgeAccoun
   return remember(key, { kind: "hits", repositories });
 }
 
-function deduped(personal: readonly RepositoryHit[], rest: readonly RepositoryHit[]) {
-  const seen = new Set<string>();
-  const personalUnique = personal.filter((repo) => {
+function unseen(repositories: readonly RepositoryHit[], seen: Set<string>): RepositoryHit[] {
+  return repositories.filter((repo) => {
     const key = repo.fullName.toLowerCase();
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
   });
-  const restUnique = rest.filter((repo) => {
-    const key = repo.fullName.toLowerCase();
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
-  return { personal: personalUnique, rest: restUnique };
 }
 
-function groupFrom(forge: ForgeId, heading: string, outcome: PageOutcome): RepositorySearchGroup | undefined {
-  if (outcome.kind === "hits") {
-    if (outcome.repositories.length === 0) return undefined;
-    return { forge, heading, repositories: outcome.repositories, attempted: true };
-  }
+function deduped(personal: readonly RepositoryHit[], rest: readonly RepositoryHit[]) {
+  const seen = new Set<string>();
+  return { personal: unseen(personal, seen), rest: unseen(rest, seen) };
+}
+
+function groupFrom(forge: ForgeId, heading: string, outcome: PageOutcome): RepositorySearchGroup {
+  if (outcome.kind === "hits") return { forge, heading, repositories: outcome.repositories, attempted: true };
   return { forge, heading, repositories: [], notice: outcome.notice, attempted: outcome.attempted, rateLimit: outcome.rateLimit };
 }
 
@@ -323,8 +313,8 @@ export async function searchRepositories(query: string): Promise<RepositorySearc
   );
   const groups = [
     groupFrom("github", "Your GitHub repositories", personal.kind === "hits" ? { kind: "hits", repositories: githubHits.personal } : personal),
-    groupFrom("github", "Public GitHub repositories", publicPage.kind === "hits" ? { kind: "hits", repositories: githubHits.rest } : publicPage),
     bitbucketPage ? groupFrom("bitbucket", "Your Bitbucket repositories", bitbucketPage) : undefined,
+    groupFrom("github", "Public GitHub repositories", publicPage.kind === "hits" ? { kind: "hits", repositories: githubHits.rest } : publicPage),
   ].filter((group) => group !== undefined);
   return { groups };
 }

@@ -116,9 +116,7 @@ describe("forge accounts", () => {
     expect(hasForgeAccount("github")).toBe(false);
   });
 
-  test("stored Bitbucket JSON wins over the environment pair", () => {
-    process.env.BKT_TOKEN = "env-token";
-    process.env.BKT_USERNAME = "env@example.com";
+  test("stores a Bitbucket account as private JSON", () => {
     const first = bitbucketAccount("ada@example.com", "first-token");
     setForgeAccount({ forge: "bitbucket", email: first.email, token: "second-token" });
 
@@ -127,18 +125,6 @@ describe("forge accounts", () => {
     expect(JSON.parse(file)).toEqual({ email: "ada@example.com", token: "second-token" });
     expect(statSync(join(dataDir, "workspace", "bitbucket-account")).mode & 0o777).toBe(0o600);
     expect(readdirSync(join(dataDir, "workspace")).some((name) => name.includes(".tmp-"))).toBe(false);
-  });
-
-  test("a Bitbucket disable marker suppresses the environment pair", () => {
-    process.env.BKT_TOKEN = "env-token";
-    process.env.BKT_USERNAME = "ada@example.com";
-
-    clearForgeAccount("bitbucket");
-    expect(discoverForgeAccount("bitbucket")).toBeUndefined();
-    expect(hasForgeAccount("bitbucket")).toBe(false);
-
-    clearForgeAccount("bitbucket");
-    expect(discoverForgeAccount("bitbucket")).toBeUndefined();
   });
 
   test("a Bitbucket token without an email is not an account", () => {
@@ -261,6 +247,6 @@ describe("forge accounts", () => {
       BKT_AUTH_METHOD: "basic",
     });
     expect(forgePlainEnv([bitbucket])).not.toHaveProperty("BKT_TOKEN");
-    expect(forgeGitEnv([])).toEqual({});
+    expect(forgeGitEnv([])).toEqual({ GH_TOKEN: "", BKT_TOKEN: "" });
   });
 });

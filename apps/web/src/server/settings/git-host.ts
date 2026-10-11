@@ -138,10 +138,11 @@ export async function handleForgeSettingsRequest(request: Request, url: URL): Pr
   setForgeAccount(validation.account);
   if (!await getStoredCommitIdentity()) await setCommitIdentity({ name: validation.commitName, email: validation.commitEmail });
   if (surface === "onboarding") return stream(update("onboarding_modal_host", await renderOnboardingDialog({ resumeAfter: "github" })));
+  const onboarding = parsed.forge === "github" ? update("onboarding_modal_host", await renderOnboardingDialog()) : "";
   return stream(
     `${replace(forgeSectionId(parsed.forge), await renderForgeSection(parsed.forge))}`
     + `${replace("settings_commit_identity", await renderCommitIdentityForm())}`
-    + `${update("onboarding_modal_host", await renderOnboardingDialog())}`,
+    + onboarding,
   );
 }
 

@@ -1,6 +1,6 @@
 import { parseAtlassianAccountEmail, parseBitbucketToken, type ForgeAccount } from "@agents-in-the-cloud/core";
-import { Type, type Static, type TSchema } from "typebox";
-import { Value } from "typebox/value";
+import { Type } from "typebox";
+import { bitbucketBasicAuthorization, decodeResponseJson } from "./forge-http.ts";
 
 export type ForgeAccountInput =
   | { readonly forge: "github"; readonly token: string }
@@ -32,15 +32,6 @@ function optionalTrimmed(value: string | null | undefined): string | undefined {
   return value?.trim() || undefined;
 }
 
-async function decodeJsonResponse<Schema extends TSchema>(response: Response, schema: Schema): Promise<Static<Schema> | undefined> {
-  try {
-    const encoded: unknown = await response.json();
-    return Value.Parse(schema, encoded);
-  } catch {
-    return undefined;
-  }
-}
-
 function githubHeaders(token: string): HeadersInit {
   return {
     accept: "application/vnd.github+json",
@@ -54,7 +45,7 @@ async function fetchPrimaryGitHubEmail(token: string): Promise<string | undefine
   try {
     const response = await fetch("https://api.github.com/user/emails", { headers: githubHeaders(token) });
     if (!response.ok) return undefined;
-    const emails = await decodeJsonResponse(response, githubEmailResponseSchema);
+    const emails = await decodeResponseJson(response, githubEmailResponseSchema);
     if (!emails) return undefined;
     for (const email of emails) {
       if (email.primary && email.verified) return email.email.trim();
@@ -79,7 +70,7 @@ async function validateGitHubAccount(token: string): Promise<ForgeAccountValidat
   if (response.status === 401 || response.status === 403) return { ok: false, message: "GitHub rejected that token. Check that it is active and has repository read access." };
   if (!response.ok) return { ok: false, message: `GitHub token validation failed (${response.status}). Try again.` };
 
-  const body = await decodeJsonResponse(response, githubUserResponseSchema);
+  const body = await decodeResponseJson(response, githubUserResponseSchema);
   if (!body) return { ok: false, message: "GitHub returned an invalid user response. Try again." };
   const login = body.login.trim();
   const commitName = optionalTrimmed(body.name) ?? login;
@@ -95,7 +86,7 @@ async function validateBitbucketAccount(emailInput: string, tokenInput: string):
 
   const headers = {
     accept: "application/json",
-    authorization: `Basic ${Buffer.from(`${email}:${token}`).toString("base64")}`,
+    authorization: bitbucketBasicAuthorization(email, token),
   };
   const localPart = email.split("@")[0] ?? email;
   const repositories = new URL("https://api.bitbucket.org/2.0/repositories");
@@ -116,7 +107,7 @@ async function validateBitbucketAccount(emailInput: string, tokenInput: string):
   try {
     const profile = await fetch("https://api.bitbucket.org/2.0/user", { headers });
     if (profile.ok) {
-      const body = await decodeJsonResponse(profile, bitbucketUserResponseSchema);
+      const body = await decodeResponseJson(profile, bitbucketUserResponseSchema);
       commitName = optionalTrimmed(body?.display_name) ?? optionalTrimmed(body?.username) ?? localPart;
     }
   } catch {

@@ -73,8 +73,8 @@ export function discoverForgeAccount(forgeId: ForgeId): ForgeAccount | undefined
       return readStoredBitbucketAccount(raw);
     }
   }
-  if (existsSync(workspaceFile(forge.disabledFile))) return undefined;
   if (forge.id === "github") {
+    if (existsSync(workspaceFile(forge.disabledFile))) return undefined;
     const token = process.env[forge.hostFallbackEnv]?.trim();
     return token ? { forge: "github", token } : undefined;
   }
@@ -122,7 +122,6 @@ export function setForgeAccount(account: ForgeAccount): void {
       if (!email || !token) throw invalidArguments("Bitbucket account is invalid.");
       const forge = cloudForge("bitbucket");
       writeTextAtomicSync(workspaceFile(forge.storeFile), `${JSON.stringify({ email, token }, null, 2)}\n`);
-      rmSync(workspaceFile(forge.disabledFile), { force: true });
       return;
     }
     default: {
@@ -134,8 +133,9 @@ export function setForgeAccount(account: ForgeAccount): void {
 
 export function clearForgeAccount(forgeId: ForgeId): void {
   const forge = cloudForge(forgeId);
-  const disabledPath = workspaceFile(forge.disabledFile);
   rmSync(workspaceFile(forge.storeFile), { force: true });
+  if (forge.id !== "github") return;
+  const disabledPath = workspaceFile(forge.disabledFile);
   mkdirSync(dirname(disabledPath), { recursive: true });
   writeFileSync(disabledPath, "", { mode: 0o600 });
 }
@@ -145,9 +145,11 @@ export function clearForgeAccounts(): void {
 }
 
 export function forgeGitEnv(accounts: readonly ForgeAccount[]) {
-  const env: Record<string, string> = {};
-  for (const account of accounts) env[cloudForge(account.forge).tokenEnv] = account.token;
-  return env;
+  const connected = new Map(accounts.map((account) => [account.forge, account.token]));
+  return {
+    GH_TOKEN: connected.get("github") ?? "",
+    BKT_TOKEN: connected.get("bitbucket") ?? "",
+  };
 }
 
 export function forgePlainEnv(accounts: readonly ForgeAccount[]) {
