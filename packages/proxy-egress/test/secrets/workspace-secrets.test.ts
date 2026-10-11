@@ -3,7 +3,8 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { addWorkspaceTemplate, createWorkspaceTemplateSecret, updateWorkspaceTemplateSecret, deleteWorkspaceTemplateSecret, type GitWorkspaceTemplateInitInstruction } from "@agents-in-the-cloud/workspace-templates";
-import { createWorkspaceSecretContext, registerWorkspaceRequestTransform, clearGitHubToken, forgetWorkspaceSecretContext, getWorkspaceSecretContext, setGitHubToken } from "../../src/secrets/workspace-secrets.ts";
+import { parseAtlassianAccountEmail } from "@agents-in-the-cloud/core";
+import { createWorkspaceSecretContext, registerWorkspaceRequestTransform, clearForgeAccounts, forgetWorkspaceSecretContext, getWorkspaceSecretContext, setForgeAccount } from "../../src/secrets/workspace-secrets.ts";
 
 function workspaceTemplateInit(workspaceTemplateId: string): GitWorkspaceTemplateInitInstruction {
   return { type: "project.git", projectId: workspaceTemplateId, name: "Project", gitUrl: "https://github.com/org/repo.git", branch: null, sessionShareKey: "Project" };
@@ -23,7 +24,7 @@ describe("workspace secrets", () => {
   });
 
   afterEach(async () => {
-    clearGitHubToken();
+    clearForgeAccounts();
     forgetWorkspaceSecretContext("test-workspace");
     if (previousDataDir === undefined) delete process.env.ATELIER_DATA_DIR;
     else process.env.ATELIER_DATA_DIR = previousDataDir;
@@ -33,7 +34,7 @@ describe("workspace secrets", () => {
   });
 
   test("uses deterministic placeholders for workspace env secrets", async () => {
-    setGitHubToken("real-secret");
+    setForgeAccount({ forge: "github", token: "real-secret" });
     const context = await createWorkspaceSecretContext("test-workspace");
 
     expect(context.env.GH_TOKEN).toBe("AGENTSINTHECLOUD_PROXY_READY_GH_TOKEN");
@@ -114,7 +115,7 @@ describe("workspace secrets", () => {
   });
 
   test("path injection defaults to Telegram only and respects live per-secret overrides", async () => {
-    setGitHubToken("github-credential");
+    setForgeAccount({ forge: "github", token: "github-credential" });
     const workspaceTemplate = (await addWorkspaceTemplate("https://github.com/org/path-secrets.git")).workspaceTemplate;
     const init = workspaceTemplateInit(workspaceTemplate.id);
     const values = { envName: "BOT_TOKEN", hostPattern: "api.telegram.org", secretValue: "123:telegram-credential" };
@@ -151,6 +152,33 @@ describe("workspace secrets", () => {
     for (const ip of ["93.184.215.14", "8.8.8.8", "2606:4700:10::6814:179a"]) {
       expect(await context.hooks.isIpAllowed!({ hostname: "example.com", ip, family: ip.includes(":") ? 6 : 4, port: 443, protocol: "https" })).toBe(true);
     }
+  });
+
+  test("offers the Bitbucket API token only to Bitbucket hosts", async () => {
+    const email = parseAtlassianAccountEmail("ada@example.com");
+    if (!email) throw new Error("Atlassian email did not parse");
+    setForgeAccount({ forge: "bitbucket", email, token: "bb-token" });
+    const context = await createWorkspaceSecretContext("bitbucket-workspace");
+    const placeholder = "AGENTSINTHECLOUD_PROXY_READY_BKT_TOKEN";
+
+    expect(context.env.BKT_TOKEN).toBe(placeholder);
+    expect(context.env.BKT_USERNAME).toBe("ada@example.com");
+    expect(context.env.BKT_HOST).toBe("https://bitbucket.org");
+    expect(context.env.BKT_AUTH_METHOD).toBe("basic");
+    expect(context.secrets).toContainEqual({
+      name: "BKT_TOKEN",
+      placeholder,
+      hosts: ["bitbucket.org", "api.bitbucket.org"],
+    });
+    for (const host of ["bitbucket.org", "api.bitbucket.org"]) {
+      for (const username of ["ada@example.com", "x-bitbucket-api-token-auth"]) {
+        const presented = Buffer.from(`${username}:${placeholder}`).toString("base64");
+        const result = await context.hooks.onRequest(new Request(`https://${host}/`, { headers: { authorization: `Basic ${presented}` } }));
+        expect(result.headers.get("authorization")).toBe(`Basic ${Buffer.from(`${username}:bb-token`).toString("base64")}`);
+      }
+    }
+    expect(() => context.hooks.onRequest(new Request("https://example.com/", { headers: { authorization: `Bearer ${placeholder}` } }))).toThrow("secret BKT_TOKEN not allowed for host: example.com");
+    forgetWorkspaceSecretContext("bitbucket-workspace");
   });
 
   test("passes an inherited placeholder onward for nested AgentsInTheCloud", async () => {

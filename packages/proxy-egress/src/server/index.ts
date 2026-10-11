@@ -15,11 +15,13 @@ export {
   registerWorkspaceSubscriptionSecrets,
   registerWorkspaceRequestTransform,
   registerWorkspaceResponseTransform,
-  clearGitHubToken,
+  clearForgeAccount,
+  clearForgeAccounts,
   createWorkspaceSecretContext,
-  discoverGitHubToken,
-  hasGitHubToken,
-  setGitHubToken,
+  discoverForgeAccount,
+  discoverForgeAccounts,
+  hasForgeAccount,
+  setForgeAccount,
 } from "../secrets/workspace-secrets.ts";
 export { HttpRequestBlockedError } from "../secrets/errors.ts";
 

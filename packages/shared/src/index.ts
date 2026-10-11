@@ -1,4 +1,5 @@
 import type { AgentsInTheCloudEventBus, JsonObject, JsonValue } from "@agents-in-the-cloud/core";
+import { isSchemeLessCloudForgeSpec } from "@agents-in-the-cloud/core/cloud-forges";
 import type { TSchema } from "typebox";
 import { escapeHtml } from "./html.ts";
 import type { WorkspaceGateway } from "./workspace-gateway.ts";
@@ -48,10 +49,11 @@ export async function copyTextToClipboard(text: string): Promise<void> {
 }
 
 export function looksLikeWorkspaceTemplateSpec(value: string): boolean {
-  return /^(https?:\/\/|git@|ssh:\/\/|\/|\.\/|\.\.\/|[A-Za-z]:\\|github\.com\/)/i.test(value.trim());
+  const trimmed = value.trim();
+  return /^(https?:\/\/|git@|ssh:\/\/|\/|\.\/|\.\.\/|[A-Za-z]:\\)/i.test(trimmed) || isSchemeLessCloudForgeSpec(trimmed);
 }
 
-export function shouldSearchGitHubRepositories(query: string): boolean {
+export function shouldSearchRepositories(query: string): boolean {
   const trimmed = query.trim();
   return trimmed.length >= 2 && !looksLikeWorkspaceTemplateSpec(trimmed);
 }

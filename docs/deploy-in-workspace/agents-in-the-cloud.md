@@ -183,7 +183,7 @@ This is useful for screenshots, images, videos, HTML pages, and other outputs.
 
 AgentsInTheCloud clones repository workspaces from the saved Git URL. Git submodules are synchronized, initialized, and checked out recursively as part of the reusable template checkout, so fresh workspaces include submodule contents without additional setup.
 
-For GitHub repositories and HTTPS GitHub submodules, AgentsInTheCloud can use the GitHub token configured in Settings. The token is handled by AgentsInTheCloud for Git operations, is only offered to HTTPS requests for `github.com`, and is not stored as the real token in the workspace environment.
+For GitHub repositories and HTTPS GitHub submodules, AgentsInTheCloud can use the GitHub token configured in Settings. The token is handled by AgentsInTheCloud for Git operations, is only offered to HTTPS requests for `github.com`, and is not stored as the real token in the workspace environment. Bitbucket Cloud API tokens are offered only to HTTPS `bitbucket.org` and `api.bitbucket.org`, and the workspace `BKT_TOKEN` is not the real token.
 
 Before deleting a workspace, AgentsInTheCloud checks the top-level repository and every initialized submodule recursively for uncommitted changes and unpushed commits. If work should be kept, commit and push it before deleting.
 
