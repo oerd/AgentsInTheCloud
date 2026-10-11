@@ -46,10 +46,10 @@ export async function inspectPlatform(run: Run, ref: string, platform: string, r
   return config;
 }
 
-export async function authenticateRegistry(run: Run) {
+export async function authenticateRegistry(run: Run, username: string) {
   const token = process.env.GH_PACKAGE_TOKEN?.trim();
   if (!token) throw new Error("GH_PACKAGE_TOKEN is required to publish images to ghcr.io");
-  await run(["docker", "login", "ghcr.io", "--username", "lucasmeijer", "--password-stdin"], { input: token });
+  await run(["docker", "login", "ghcr.io", "--username", username, "--password-stdin"], { input: token });
 }
 
 export async function ensureBuilders(run: Run, directory: string) {

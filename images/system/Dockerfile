@@ -2,6 +2,8 @@ ARG RUNTIME_IMAGE=ghcr.io/lucasmeijer/agents-in-the-cloud-docker@sha256:144a54ae
 FROM oven/bun:1.3.14@sha256:e10577f0db68676a7024391c6e5cb4b879ebd17188ab750cf10024a6d700e5c4 AS bun
 FROM ghcr.io/tailscale/tailscale:v1.102.3@sha256:8c42c4574ab066384fcb72f69e086a2ff1dd3652eb6f56856cee34bcf0d2f680 AS tailscale
 FROM ${RUNTIME_IMAGE}
+ARG GHCR_OWNER=lucasmeijer
+ENV GHCR_OWNER=${GHCR_OWNER}
 # Keep incident-response tools in the System image, not the shared Docker runtime.
 # Profiling needs host kernel support/permissions; installing systemd only supplies
 # its diagnostic commands (the container still runs the AgentsInTheCloud supervisor).

@@ -1,3 +1,4 @@
+import { imageRepository, resolveRegistryOwner } from "../../../packages/core/src/ghcr.ts";
 import { readFile } from "node:fs/promises";
 import { Type } from "typebox";
 import { Value } from "typebox/value";
@@ -12,7 +13,7 @@ const settingsSchema = Type.Object({
 export async function prepareChannelUpdate(settingsPath: string, images: {
   pull: (reference: string) => Promise<void>;
   inspect: (reference: string) => Promise<string>;
-}): Promise<string> {
+}, repository = imageRepository(resolveRegistryOwner(), "app")): Promise<string> {
   const text = await readFile(settingsPath, "utf8").catch((error) => {
     if (error instanceof Error && "code" in error && error.code === "ENOENT") return undefined;
     throw error;
@@ -20,7 +21,7 @@ export async function prepareChannelUpdate(settingsPath: string, images: {
   const settings: unknown = text === undefined ? {} : JSON.parse(text);
   if (!Value.Check(settingsSchema, settings)) throw new Error("Invalid update settings");
   const updateChannel = settings.releaseChannel ?? "latest";
-  const reference = `ghcr.io/lucasmeijer/agents-in-the-cloud:${updateChannel}`;
+  const reference = `${repository}:${updateChannel}`;
   // Always refresh the mutable channel tag, even if Docker already has it.
   // Pin the result before dependencies are prepared or the app is stopped.
   await images.pull(reference);

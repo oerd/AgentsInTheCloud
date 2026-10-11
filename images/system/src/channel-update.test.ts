@@ -114,6 +114,12 @@ test("always completes a fresh pull before inspecting and returns the exact imag
   ]);
 });
 
+test("channel pull uses the installed repository", async () => {
+  const images = imageOperations();
+  expect(await prepareChannelUpdate(settingsPath, images, "ghcr.io/oerd/agents-in-the-cloud")).toBe("sha256:resolved-app");
+  expect(images.pull).toHaveBeenCalledWith("ghcr.io/oerd/agents-in-the-cloud:latest");
+});
+
 test("inspect failures propagate", async () => {
   const failure = new Error("Image inspection failed");
   const images = imageOperations();

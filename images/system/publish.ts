@@ -2,12 +2,15 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { imageRepository, registryOwnerFrom } from "../../packages/core/src/ghcr.ts";
 import { authenticateRegistry, commandRunner, ensureBuilders, inspectImage, inspectPlatform, platforms, type Run } from "../../scripts/release-support.ts";
 
 const root = resolve(import.meta.dir, "../..");
-const image = "ghcr.io/lucasmeijer/agents-in-the-cloud-system";
 
 export async function publishSystem(run: Run, directory: string, check = false) {
+  const origin = await run(["git", "remote", "get-url", "origin"], { allowFailure: true });
+  const owner = registryOwnerFrom(process.env, origin.code === 0 ? origin.stdout.trim() : undefined);
+  const image = imageRepository(owner, "system");
   if (!check && (await run(["git", "status", "--porcelain"])).stdout.trim())
     throw new Error("Commit changes before publishing System.");
 
@@ -18,7 +21,7 @@ export async function publishSystem(run: Run, directory: string, check = false) 
 
   const revision = (await run(["git", "rev-parse", "HEAD"])).stdout.trim();
   const ref = `${image}:sha-${revision}`;
-  await authenticateRegistry(run);
+  await authenticateRegistry(run, owner);
   await run(["bun", "install", "--cwd", "images/system", "--frozen-lockfile"], { stream: true });
   await run(["bun", "images/system/build.ts"], { stream: true });
 
@@ -28,6 +31,7 @@ export async function publishSystem(run: Run, directory: string, check = false) 
     const slice = `${ref}-${platform.split("/")[1]}`;
     await run(["docker", "--context", context, "buildx", "build", "--platform", platform,
       "--provenance=false", "--push", "--progress", "plain", "--tag", slice,
+      "--build-arg", `GHCR_OWNER=${owner}`,
       "--label", `org.opencontainers.image.revision=${revision}`,
       "--file", "images/system/Dockerfile", "images/system"], { stream: true });
     const manifest = JSON.parse((await run(["docker", "buildx", "imagetools", "inspect", slice, "--format", "{{json .Manifest}}"])).stdout);

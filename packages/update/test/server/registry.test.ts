@@ -132,6 +132,27 @@ test("tag plus digest references use the repository path and preserve the pinned
   expect(result.reference).toBe(`ghcr.io/example/workspace@${index}`);
 });
 
+test("GHCR_OWNER selects the fork repository for channel discovery", async () => {
+  const previous = process.env.GHCR_OWNER;
+  process.env.GHCR_OWNER = "oerd";
+  try {
+    const fetcher = async (input: URL | RequestInfo) => {
+      const url = String(input);
+      if (url === "https://ghcr.io/v2/oerd/agents-in-the-cloud/manifests/latest") {
+        return Response.json({ config: { digest: "sha256:latest-config" }, layers: [] }, { headers: { "docker-content-digest": "sha256:fork" } });
+      }
+      if (url === "https://ghcr.io/v2/oerd/agents-in-the-cloud/blobs/sha256:latest-config") {
+        return Response.json({ os: "linux", architecture: process.arch === "arm64" ? "arm64" : "amd64", config: { Labels: { "org.opencontainers.image.revision": "fork-revision" } } });
+      }
+      throw new Error(`unexpected fetch ${url}`);
+    };
+    await expect(fetchChannelImageMetadata("latest", fetcher)).resolves.toEqual({ digest: "sha256:fork", revision: "fork-revision" });
+  } finally {
+    if (previous === undefined) delete process.env.GHCR_OWNER;
+    else process.env.GHCR_OWNER = previous;
+  }
+});
+
 test("latest discovery only requests the new product's latest tag", async () => {
   const calls: string[] = [];
   const fetcher = async (input: URL | RequestInfo) => {

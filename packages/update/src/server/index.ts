@@ -7,7 +7,7 @@ import { transientFeedbackHtml } from "@agents-in-the-cloud/design-system/transi
 import { errorMessage, escapeHtml, turboStream, turboStreamResponse, type SettingsContribution, type WorkspaceModule, type WorkspaceServerModuleContext } from "@agents-in-the-cloud/shared";
 import { isUpdateChannel, type UpdateChannel } from "./update-channel.ts";
 import { detectSelfUpdateRuntime, prepareUpdate, type PreparedUpdate, type PullProgress, type SelfUpdateRuntime } from "./docker.ts";
-import { fetchChannelImageMetadata, repository, type ImageMetadata } from "./registry.ts";
+import { fetchChannelImageMetadata, registryRepository, type ImageMetadata } from "./registry.ts";
 import { readStoredUpdateChannel, writeStoredUpdateChannel } from "./settings-store.ts";
 import { requestSupervisorUpdate } from "./supervisor.ts";
 
@@ -148,7 +148,7 @@ export class UpdateManager {
   }
 
   private async pullNewestTarget(): Promise<void> {
-    const reference = `ghcr.io/${repository}@${this.target!.digest}`;
+    const reference = `ghcr.io/${registryRepository()}@${this.target!.digest}`;
     this.prepared = undefined;
     this.setState("pulling");
     this.prepared = await (this.deps.prepareUpdate ?? prepareUpdate)(reference, (progress) => {

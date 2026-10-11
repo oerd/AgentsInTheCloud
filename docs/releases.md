@@ -33,6 +33,8 @@ Existing `ATELIER_*` environment/build-argument names remain unchanged; defaults
 storage names, labels and runtime protocols do not adopt Atelier state.
 
 Publishing requires the existing `GH_PACKAGE_TOKEN` with GHCR package write access.
+The GHCR owner is `GHCR_OWNER`, then `GITHUB_REPOSITORY_OWNER`, then the GitHub owner of `origin`, then `lucasmeijer`.
+Docker login uses that same owner. Upstream with none of those set still publishes `ghcr.io/lucasmeijer/...`.
 Docker, Buildx, Bun and Git are required and supplied by the Atelier workspace.
 The release CLI runs on Linux and macOS; it calls the native OS locking API through
 Bun rather than requiring a `flock` executable. No GitHub Actions or host Docker

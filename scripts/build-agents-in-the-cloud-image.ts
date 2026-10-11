@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 
 import { workloadCgroupArgs } from "@agents-in-the-cloud/core";
+import { ghcrRepository, imageRepository, ownerFromRepository, registryOwnerFrom } from "../packages/core/src/ghcr.ts";
 import { rmSync } from "node:fs";
 import { arch } from "node:os";
 import { imageHasPlatforms } from "../packages/workspace-image/src/local-images.ts";
@@ -13,7 +14,8 @@ Usage:
   bun run scripts/build-agents-in-the-cloud-image.ts [options]
 
 Options:
-  --image <name>        Image repository/name (default: ghcr.io/lucasmeijer/agents-in-the-cloud)
+  --image <name>        Image repository/name (default: ghcr.io/<owner>/agents-in-the-cloud)
+                        Owner is GHCR_OWNER, then GITHUB_REPOSITORY_OWNER, then the GitHub owner of origin, then lucasmeijer.
   --tag <tag>           Tag to apply. May be passed more than once (default: git describe/short sha)
   --latest             Tag the image as <image>:latest (default)
   --no-latest          Do not update latest (release staging)
@@ -63,9 +65,14 @@ function takeValue(args: string[], index: number, flag: string): string {
   return value;
 }
 
+function defaultAppImage(): string {
+  const origin = maybeRun(["git", "remote", "get-url", "origin"]);
+  return imageRepository(registryOwnerFrom(process.env, origin), "app");
+}
+
 function parseArgs(args: string[]): Options {
   const options: Options = {
-    image: "ghcr.io/lucasmeijer/agents-in-the-cloud",
+    image: defaultAppImage(),
     tags: [],
     latest: true,
     stable: false,
@@ -113,8 +120,9 @@ function parseArgs(args: string[]): Options {
       i++;
     } else if (arg === "--build-arg") {
       const value = takeValue(args, i, arg);
-      if (["ATELIER_DEFAULT_WORKSPACE_IMAGE", "ATELIER_EAGERLY_PRELOAD"].includes(value.split("=")[0]!)) {
-        fail("The release script owns the default workspace reference and preload label");
+      const buildArgName = value.split("=")[0]!;
+      if (["ATELIER_DEFAULT_WORKSPACE_IMAGE", "ATELIER_EAGERLY_PRELOAD", "GHCR_OWNER"].includes(buildArgName)) {
+        fail(`The image build owns ${buildArgName}`);
       }
       options.buildArgs.push(value);
       i++;
@@ -161,7 +169,7 @@ function authenticateGhcr(options: Options): void {
   if (!token) throw new Error("GH_PACKAGE_TOKEN is required to publish images to ghcr.io");
 
   const result = Bun.spawnSync(
-    ["docker", "login", "ghcr.io", "--username", "lucasmeijer", "--password-stdin"],
+    ["docker", "login", "ghcr.io", "--username", ownerFromRepository(options.image), "--password-stdin"],
     { stdin: new TextEncoder().encode(token), stdout: "inherit", stderr: "inherit" },
   );
   if (result.exitCode !== 0) throw new Error(`docker login ghcr.io failed with exit code ${result.exitCode}`);
@@ -204,7 +212,6 @@ function gitCommitId(): string {
 }
 
 function workspaceImageRepository(appImage: string): string {
-  if (appImage === "ghcr.io/lucasmeijer/agents-in-the-cloud") return "ghcr.io/lucasmeijer/agents-in-the-cloud-workspace";
   return `${appImage}-workspace`;
 }
 
@@ -299,6 +306,8 @@ const defaultBuildArgs = [
   `ATELIER_DEFAULT_WORKSPACE_IMAGE=${publishedWorkspaceRef}`,
   `ATELIER_EAGERLY_PRELOAD=${JSON.stringify([publishedWorkspaceRef])}`,
 ];
+const appRepository = ghcrRepository(options.image);
+if (appRepository) defaultBuildArgs.push(`GHCR_OWNER=${ownerFromRepository(appRepository)}`);
 const allBuildArgs = [...defaultBuildArgs, ...options.buildArgs];
 
 await buildImage(imageRefs, [
