@@ -3,9 +3,11 @@
 import { workloadCgroupArgs } from "@agents-in-the-cloud/core";
 import { rmSync } from "node:fs";
 import { arch } from "node:os";
+import { ImageRepository, productImages } from "../packages/shared/src/image-reference.ts";
 import { imageHasPlatforms } from "../packages/workspace-image/src/local-images.ts";
 import { registryImageHasPlatforms } from "./image-platforms.ts";
 import { prepareDefaultWorkspaceImage, ensureGeneratedDefaultWorkspaceImage } from "@agents-in-the-cloud/workspace-image";
+import { authenticateRegistry } from "./release-support.ts";
 
 const usage = `Build the AgentsInTheCloud Docker image.
 
@@ -13,7 +15,7 @@ Usage:
   bun run scripts/build-agents-in-the-cloud-image.ts [options]
 
 Options:
-  --image <name>        Image repository/name (default: ghcr.io/lucasmeijer/agents-in-the-cloud)
+  --image <name>        Image repository/name (default: ${productImages.app.reference()})
   --tag <tag>           Tag to apply. May be passed more than once (default: git describe/short sha)
   --latest             Tag the image as <image>:latest (default)
   --no-latest          Do not update latest (release staging)
@@ -21,7 +23,7 @@ Options:
   --helper-context <name> SSH Docker context for the non-native slice (release orchestration)
   --native-platform <value> Local daemon platform when using --helper-context
   --stable             Also tag the image as <image>:stable
-  --push               Push the built images instead of only loading them locally. Uses GH_PACKAGE_TOKEN for ghcr.io.
+  --push               Push the built images instead of only loading them locally. Docker Hub uses the current docker login.
   --platform <value>   Docker platform(s), e.g. linux/amd64 or linux/amd64,linux/arm64
   --no-cache           Build without Docker cache
   --workspace          Force building the default workspace image even when the deterministic tag already exists
@@ -65,7 +67,7 @@ function takeValue(args: string[], index: number, flag: string): string {
 
 function parseArgs(args: string[]): Options {
   const options: Options = {
-    image: "ghcr.io/lucasmeijer/agents-in-the-cloud",
+    image: productImages.app.reference(),
     tags: [],
     latest: true,
     stable: false,
@@ -154,19 +156,6 @@ function maybeRun(command: string[]): string | undefined {
   }
 }
 
-function authenticateGhcr(options: Options): void {
-  if (!options.push || !options.image.startsWith("ghcr.io/")) return;
-
-  const token = process.env.GH_PACKAGE_TOKEN?.trim();
-  if (!token) throw new Error("GH_PACKAGE_TOKEN is required to publish images to ghcr.io");
-
-  const result = Bun.spawnSync(
-    ["docker", "login", "ghcr.io", "--username", "lucasmeijer", "--password-stdin"],
-    { stdin: new TextEncoder().encode(token), stdout: "inherit", stderr: "inherit" },
-  );
-  if (result.exitCode !== 0) throw new Error(`docker login ghcr.io failed with exit code ${result.exitCode}`);
-}
-
 function dockerArchitecture(): string {
   const value = arch();
   if (value === "x64") return "amd64";
@@ -201,11 +190,6 @@ function gitCommitId(): string {
   const commit = maybeRun(["git", "rev-parse", "HEAD"]);
   const dirty = maybeRun(["git", "status", "--porcelain"]) ? "-dirty" : "";
   return commit ? `${commit}${dirty}` : "unknown";
-}
-
-function workspaceImageRepository(appImage: string): string {
-  if (appImage === "ghcr.io/lucasmeijer/agents-in-the-cloud") return "ghcr.io/lucasmeijer/agents-in-the-cloud-workspace";
-  return `${appImage}-workspace`;
 }
 
 function workspaceHashTag(metadataTag: string): string {
@@ -254,7 +238,18 @@ async function buildImage(refs: string[], args: string[]): Promise<void> {
   }
   await runInherited(["docker", "buildx", "imagetools", "create", ...refs.flatMap(ref => ["--tag", ref]), ...slices]);
 }
-authenticateGhcr(options);
+const repository = ImageRepository.parse(options.image);
+if (options.push) {
+  await authenticateRegistry(async (args, command) => {
+    const result = Bun.spawnSync(args, {
+      stdin: command?.input === undefined ? "inherit" : new TextEncoder().encode(command.input),
+      stdout: "inherit",
+      stderr: "inherit",
+    });
+    if (result.exitCode !== 0) throw new Error(`${args.slice(0, 3).join(" ")} exited ${result.exitCode}`);
+    return { code: 0, stdout: "", stderr: "" };
+  }, repository);
+}
 // Release tooling may live outside the detached checkout used as the app build context.
 // Generate its paired workspace image from that same checkout, not this script's imports.
 const workspaceContext = await prepareDefaultWorkspaceImage(process.cwd());
@@ -269,7 +264,7 @@ const imageRefs = uniqueTags.map((tag) => `${options.image}:${tag}`);
 
 const workspaceMetadata = workspaceContext.metadata;
 const workspaceTag = workspaceHashTag(workspaceMetadata.tag);
-const workspaceRepo = workspaceImageRepository(options.image);
+const workspaceRepo = repository.workspace().reference();
 const defaultWorkspaceImageRef = `${workspaceRepo}:${workspaceTag}`;
 
 let shouldBuildWorkspace = false;

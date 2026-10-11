@@ -3,10 +3,11 @@ import { appendFileSync, mkdirSync, renameSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { Type } from "typebox";
 import { Value } from "typebox/value";
+import { productImages } from "../packages/shared/src/image-reference.ts";
 import { authenticateRegistry, commandRunner, ensureBuilders, inspectImage, inspectPlatform, platforms, type Run } from "./release-support.ts";
 import { acquireReleaseLock } from "./release-lock.ts";
 
-const image = "ghcr.io/lucasmeijer/agents-in-the-cloud";
+const image = productImages.app.reference();
 const root = resolve(import.meta.dir, "..");
 export const usage = `Release AgentsInTheCloud from the current origin/main commit.
 
@@ -16,7 +17,7 @@ export const usage = `Release AgentsInTheCloud from the current origin/main comm
 
 --check may be combined with --stable. Working files are never released or reset.
 Requires ATELIER_RELEASE_HELPER=[user@]hostname with noninteractive SSH and Docker access.
-Uses the existing GH_PACKAGE_TOKEN for publishing. Logs/status live under Git's
+Publish ${image} using the current docker login. Logs/status live under Git's
 common directory in agents-in-the-cloud-releases/<run-id>/. See docs/releases.md.
 `;
 
@@ -97,7 +98,7 @@ export async function release(options: ReturnType<typeof parseReleaseArgs>, run:
   }
 
   phase("Authenticate registry");
-  await authenticateRegistry(run);
+  await authenticateRegistry(run, productImages.app);
   const ref = `${image}:sha-${status.commit}`;
   phase("Look for an existing commit image");
   if (!await inspectImage(run, ref, true)) {

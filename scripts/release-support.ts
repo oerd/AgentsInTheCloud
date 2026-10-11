@@ -1,3 +1,4 @@
+import type { ImageRepository } from "../packages/shared/src/image-reference.ts";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
@@ -46,10 +47,12 @@ export async function inspectPlatform(run: Run, ref: string, platform: string, r
   return config;
 }
 
-export async function authenticateRegistry(run: Run) {
+export async function authenticateRegistry(run: Run, repository: ImageRepository) {
+  const auth = repository.pushAuth();
+  if (auth.kind === "existing-login") return;
   const token = process.env.GH_PACKAGE_TOKEN?.trim();
   if (!token) throw new Error("GH_PACKAGE_TOKEN is required to publish images to ghcr.io");
-  await run(["docker", "login", "ghcr.io", "--username", "lucasmeijer", "--password-stdin"], { input: token });
+  await run(["docker", "login", auth.registry, "--username", auth.username, "--password-stdin"], { input: token });
 }
 
 export async function ensureBuilders(run: Run, directory: string) {

@@ -12,7 +12,7 @@ async function scenario(options: { local?: string; sameArch?: boolean; missingHe
   const helper = process.env.ATELIER_RELEASE_HELPER;
   const token = process.env.GH_PACKAGE_TOKEN;
   process.env.ATELIER_RELEASE_HELPER = options.missingHelper ? "" : "builder@test-helper";
-  process.env.GH_PACKAGE_TOKEN = "test-package-token";
+  delete process.env.GH_PACKAGE_TOKEN;
   const calls: { args: string[]; input?: string }[] = [];
   const run: Run = async (args, settings = {}) => {
     calls.push({ args, input: settings.input });
@@ -58,12 +58,11 @@ for (const local of ["amd64", "arm64"]) {
       expect(args).not.toContain("--builder");
     }
     const merge = calls.find(({ args }) => args.includes("imagetools") && args.includes("create"))!;
-    expect(merge.args.slice(-2)).toEqual(["amd64", "arm64"].map(arch => `ghcr.io/lucasmeijer/agents-in-the-cloud-system@${digest(arch)}`));
+    expect(merge.args.slice(-2)).toEqual(["amd64", "arm64"].map(arch => `docker.io/oerd/agents-in-the-cloud-system@${digest(arch)}`));
     const promote = calls.findLast(({ args }) => args.includes("imagetools") && args.includes("create"))!;
-    expect(promote.args.slice(-3)).toEqual(["--tag", "ghcr.io/lucasmeijer/agents-in-the-cloud-system:latest", `ghcr.io/lucasmeijer/agents-in-the-cloud-system@sha256:${"3".repeat(64)}`]);
+    expect(promote.args.slice(-3)).toEqual(["--tag", "docker.io/oerd/agents-in-the-cloud-system:latest", `docker.io/oerd/agents-in-the-cloud-system@sha256:${"3".repeat(64)}`]);
     expect(calls.some(({ args }) => args.some(arg => /binfmt|qemu|:stable/.test(arg)))).toBe(false);
-    expect(calls.find(({ args }) => args.includes("login"))?.input).toBe("test-package-token");
-    expect(calls.flatMap(call => call.args)).not.toContain("test-package-token");
+    expect(calls.some(({ args }) => args.includes("login"))).toBe(false);
   });
 }
 

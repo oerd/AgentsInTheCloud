@@ -2,10 +2,11 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { productImages } from "../../packages/shared/src/image-reference.ts";
 import { authenticateRegistry, commandRunner, ensureBuilders, inspectImage, inspectPlatform, platforms, type Run } from "../../scripts/release-support.ts";
 
 const root = resolve(import.meta.dir, "../..");
-const image = "ghcr.io/lucasmeijer/agents-in-the-cloud-system";
+const image = productImages.system.reference();
 
 export async function publishSystem(run: Run, directory: string, check = false) {
   if (!check && (await run(["git", "status", "--porcelain"])).stdout.trim())
@@ -18,7 +19,7 @@ export async function publishSystem(run: Run, directory: string, check = false) 
 
   const revision = (await run(["git", "rev-parse", "HEAD"])).stdout.trim();
   const ref = `${image}:sha-${revision}`;
-  await authenticateRegistry(run);
+  await authenticateRegistry(run, productImages.system);
   await run(["bun", "install", "--cwd", "images/system", "--frozen-lockfile"], { stream: true });
   await run(["bun", "images/system/build.ts"], { stream: true });
 
@@ -55,7 +56,7 @@ if (import.meta.main) {
     console.error("Usage: images/system/publish.sh [--check]");
     process.exitCode = 1;
   } else if (args.includes("--help") || args.includes("-h")) {
-    console.log("Publish System's commit image using two native Docker daemons and move latest to it.\nRequires ATELIER_RELEASE_HELPER=[user@]hostname and GH_PACKAGE_TOKEN.\n--check validates both native builders without publishing.");
+    console.log(`Publish System's commit image ${image} using two native Docker daemons and move latest to it.\nRun docker login first. Requires ATELIER_RELEASE_HELPER=[user@]hostname.\n--check validates both native builders without publishing.`);
   } else {
     const directory = mkdtempSync(join(tmpdir(), "agents-in-the-cloud-system-publish-"));
     const commands = commandRunner(root, text => process.stdout.write(text));

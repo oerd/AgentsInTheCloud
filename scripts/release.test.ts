@@ -1,4 +1,5 @@
-import { inspectImage, type Run } from "./release-support.ts";
+import { ImageRepository, productImages } from "../packages/shared/src/image-reference.ts";
+import { authenticateRegistry, inspectImage, type Run } from "./release-support.ts";
 import { expect, test } from "bun:test";
 import { chmodSync, cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -35,7 +36,7 @@ test("verification requires both architectures and matching revision labels", as
   const run: Run = async (args) => {
     if (args.includes("{{json .Manifest}}")) return ok(JSON.stringify(manifest));
     const index = manifest.manifests.findIndex((entry) => args.some((arg) => arg.endsWith(entry.digest)));
-    return ok(JSON.stringify({ os: "linux", architecture: architectures[index], config: { Labels: { "org.opencontainers.image.revision": commit, "eagerly-preload": JSON.stringify([`ghcr.io/lucasmeijer/agents-in-the-cloud-workspace:signature@${digest}`]) } } }));
+    return ok(JSON.stringify({ os: "linux", architecture: architectures[index], config: { Labels: { "org.opencontainers.image.revision": commit, "eagerly-preload": JSON.stringify([`docker.io/oerd/agents-in-the-cloud-workspace:signature@${digest}`]) } } }));
   };
   expect(await verifyRevision(run, "ref", commit)).toBe(digest);
   await expect(verifyRevision(run, "ref", "wrong-sha")).rejects.toThrow("does not match revision");
@@ -51,7 +52,7 @@ test("promotion uses the verified digest and reports partial success", async () 
     return ok(JSON.stringify(manifest));
   }, current, () => saves.push(JSON.stringify(current.channels)))).rejects.toThrow("push failed");
   expect(current.channels).toEqual({ latest: "published", stable: "failed" });
-  expect(calls.filter((args) => args.includes("create")).every((args) => args.at(-1) === `ghcr.io/lucasmeijer/agents-in-the-cloud@${digest}`)).toBe(true);
+  expect(calls.filter((args) => args.includes("create")).every((args) => args.at(-1) === `docker.io/oerd/agents-in-the-cloud@${digest}`)).toBe(true);
   expect(saves.length).toBe(4);
 });
 
@@ -62,7 +63,7 @@ test("both channels are promoted in order on success", async () => {
     if (args.includes("create")) channels.push(args[args.indexOf("--tag") + 1]!);
     return ok(JSON.stringify(manifest));
   }, current, () => {});
-  expect(channels).toEqual(["ghcr.io/lucasmeijer/agents-in-the-cloud:latest", "ghcr.io/lucasmeijer/agents-in-the-cloud:stable"]);
+  expect(channels).toEqual(["docker.io/oerd/agents-in-the-cloud:latest", "docker.io/oerd/agents-in-the-cloud:stable"]);
   expect(current.channels).toEqual({ latest: "published", stable: "published" });
 });
 
@@ -83,7 +84,7 @@ async function scenario(options: { check?: boolean; exists?: boolean; moved?: bo
   if (options.missingHelper) delete process.env.ATELIER_RELEASE_HELPER;
   else process.env.ATELIER_RELEASE_HELPER = "builder@helper";
   const oldToken = process.env.GH_PACKAGE_TOKEN;
-  process.env.GH_PACKAGE_TOKEN = "test-not-a-real-credential";
+  delete process.env.GH_PACKAGE_TOKEN;
   try {
     const run: Run = async (args, command) => {
       calls.push({ args, cwd: command?.cwd });
@@ -102,7 +103,7 @@ async function scenario(options: { check?: boolean; exists?: boolean; moved?: bo
       }
       if (args.includes("{{json .Image}}")) {
         const index = manifest.manifests.findIndex((entry) => args.some((arg) => arg.endsWith(entry.digest)));
-        return ok(JSON.stringify({ os: "linux", architecture: architectures[index], config: { Labels: { "org.opencontainers.image.revision": commit, "eagerly-preload": JSON.stringify([`ghcr.io/lucasmeijer/agents-in-the-cloud-workspace:signature@${digest}`]) } } }));
+        return ok(JSON.stringify({ os: "linux", architecture: architectures[index], config: { Labels: { "org.opencontainers.image.revision": commit, "eagerly-preload": JSON.stringify([`docker.io/oerd/agents-in-the-cloud-workspace:signature@${digest}`]) } } }));
       }
       if (args[0] === "bun") {
         if (options.buildFailure) throw new Error("build failed");
@@ -149,14 +150,15 @@ test("new commit is built in an isolated checkout with no latest tag before veri
   expect(error).toBeUndefined();
   expect(current.state).toBe("published");
   expect(calls.find(({ args }) => args.includes("ls-remote"))!.args).toEqual(["git", "ls-remote", "origin", "refs/heads/main"]);
-  expect(calls.flatMap(({ args }) => args).some(arg => /^ghcr\.io\/lucasmeijer\/atelier(?=[:@])/.test(arg) || arg === "ghcr.io/lucasmeijer/agents-in-the-cloud:stable")).toBe(false);
+  expect(calls.flatMap(({ args }) => args).some(arg => /^ghcr\.io\/lucasmeijer\/atelier(?=[:@])/.test(arg) || arg === "docker.io/oerd/agents-in-the-cloud:stable")).toBe(false);
   const build = calls.find(({ args }) => args[0] === "bun")!;
   expect(build.cwd).toEndWith("/source");
   expect(build.args).toContain("--no-latest");
   expect(build.args).toContain(`sha-${commit}`);
   expect(build.args).toContain("--builder");
   expect(calls.some(({ args }) => args.includes("--stable"))).toBe(false);
-  expect(calls.findIndex(({ args }) => args.includes("{{json .Image}}"))).toBeLessThan(calls.findIndex(({ args }) => args.includes("--tag") && args.includes("ghcr.io/lucasmeijer/agents-in-the-cloud:latest")));
+  expect(calls.findIndex(({ args }) => args.includes("{{json .Image}}"))).toBeLessThan(calls.findIndex(({ args }) => args.includes("--tag") && args.includes("docker.io/oerd/agents-in-the-cloud:latest")));
+  expect(calls.some(({ args }) => args.includes("login"))).toBe(false);
 });
 
 test("retry reuses uploaded commit instead of rebuilding", async () => {
@@ -195,14 +197,17 @@ test(`image build CLI pairs images from its working checkout, not its tooling ch
     const generated = Bun.spawnSync(["bun", join(checkout, "packages/workspace-image/scripts/build-context.mjs"), expectedContext], { cwd: checkout });
     expect(generated.exitCode).toBe(0);
     const expectedSignature = JSON.parse(readFileSync(join(expectedContext, "metadata.json"), "utf8")).tag.split(":")[1];
+    const env = { ...Bun.env, PATH: `${directory}:${Bun.env.PATH}` };
+    delete env.GH_PACKAGE_TOKEN;
     const process = Bun.spawn(["bun", join(import.meta.dir, "build-agents-in-the-cloud-image.ts"), "--push", "--no-latest", "--tag", "sha-test", "--builder", "test-builder", "--platform", "linux/amd64,linux/arm64", ...(split ? ["--helper-context", "test-helper", "--native-platform", "linux/amd64"] : [])], {
       cwd: checkout, stdin: "ignore", stdout: "pipe", stderr: "pipe",
-      env: { ...Bun.env, PATH: `${directory}:${Bun.env.PATH}`, GH_PACKAGE_TOKEN: "test-not-a-real-credential" },
+      env,
     });
     const [code, stderr] = await Promise.all([process.exited, new Response(process.stderr).text(), new Response(process.stdout).text()]);
     expect(stderr).not.toContain("error:");
     expect(code).toBe(0);
     const commands: string[][] = readFileSync(log, "utf8").trim().split("\n").map((line) => JSON.parse(line));
+    expect(commands.some((args) => args.includes("login"))).toBe(false);
     const builds = commands.filter((args) => args.includes("buildx") && args.includes("build"));
     expect(builds).toHaveLength(split ? 4 : 2);
     for (const args of builds) {
@@ -218,15 +223,15 @@ test(`image build CLI pairs images from its working checkout, not its tooling ch
       expect(args.some((arg) => arg.endsWith(":latest") || arg.endsWith(":stable"))).toBe(false);
     }
     const appBuild = builds[split ? 2 : 1]!;
-    expect(appBuild).toContain(`ghcr.io/lucasmeijer/agents-in-the-cloud:sha-test${split ? "-amd64" : ""}`);
+    expect(appBuild).toContain(`docker.io/oerd/agents-in-the-cloud:sha-test${split ? "-amd64" : ""}`);
     const workspaceArg = appBuild.find(arg => arg.startsWith("ATELIER_DEFAULT_WORKSPACE_IMAGE="))!;
-    expect(workspaceArg).toBe(`ATELIER_DEFAULT_WORKSPACE_IMAGE=ghcr.io/lucasmeijer/agents-in-the-cloud-workspace:${expectedSignature}@${digest}`);
-    expect(builds[0]).toContain(`ghcr.io/lucasmeijer/agents-in-the-cloud-workspace:${expectedSignature}${split ? "-amd64" : ""}`);
+    expect(workspaceArg).toBe(`ATELIER_DEFAULT_WORKSPACE_IMAGE=docker.io/oerd/agents-in-the-cloud-workspace:${expectedSignature}@${digest}`);
+    expect(builds[0]).toContain(`docker.io/oerd/agents-in-the-cloud-workspace:${expectedSignature}${split ? "-amd64" : ""}`);
     expect(appBuild).toContain(`ATELIER_EAGERLY_PRELOAD=${JSON.stringify([workspaceArg.split("=")[1]])}`);
     if (split) {
       const merges = commands.filter(args => args.includes("imagetools") && args.includes("create"));
       expect(merges).toHaveLength(2);
-      expect(merges[1]).toContain("ghcr.io/lucasmeijer/agents-in-the-cloud:sha-test");
+      expect(merges[1]).toContain("docker.io/oerd/agents-in-the-cloud:sha-test");
       for (const merge of merges) {
         expect(merge.slice(-2).every(ref => ref.endsWith(`@${digest}`))).toBe(true);
       }
@@ -261,3 +266,48 @@ for (const options of [{ missingHelper: true }, { badDriver: true }]) {
     expect(calls.some(({ args }) => args.includes("login") || args.includes("--push"))).toBe(false);
   });
 }
+
+test("Docker Hub publish does not read GH_PACKAGE_TOKEN or run docker login", async () => {
+  const calls: string[][] = [];
+  const previous = process.env;
+  let readToken = false;
+  process.env = new Proxy(previous, {
+    get(_target, prop) {
+      if (prop === "GH_PACKAGE_TOKEN") readToken = true;
+      throw new Error(`read process.env ${String(prop)}`);
+    },
+  });
+  try {
+    await authenticateRegistry(async (args) => {
+      calls.push([...args]);
+      return { code: 0, stdout: "", stderr: "" };
+    }, productImages.app);
+  } finally {
+    process.env = previous;
+  }
+  expect(readToken).toBe(false);
+  expect(calls).toEqual([]);
+});
+
+test("ghcr.io publish logs in with GH_PACKAGE_TOKEN", async () => {
+  const previous = process.env.GH_PACKAGE_TOKEN;
+  process.env.GH_PACKAGE_TOKEN = "package-token";
+  const calls: { args: string[]; input?: string }[] = [];
+  try {
+    await authenticateRegistry(async (args, options) => {
+      calls.push({ args: [...args], input: options?.input });
+      return { code: 0, stdout: "", stderr: "" };
+    }, ImageRepository.parse("ghcr.io/lucasmeijer/agents-in-the-cloud"));
+    delete process.env.GH_PACKAGE_TOKEN;
+    await expect(authenticateRegistry(async () => {
+      throw new Error("spawned docker");
+    }, ImageRepository.parse("ghcr.io/lucasmeijer/agents-in-the-cloud"))).rejects.toThrow("GH_PACKAGE_TOKEN is required to publish images to ghcr.io");
+  } finally {
+    if (previous === undefined) delete process.env.GH_PACKAGE_TOKEN;
+    else process.env.GH_PACKAGE_TOKEN = previous;
+  }
+  expect(calls).toEqual([{
+    args: ["docker", "login", "ghcr.io", "--username", "lucasmeijer", "--password-stdin"],
+    input: "package-token",
+  }]);
+});
