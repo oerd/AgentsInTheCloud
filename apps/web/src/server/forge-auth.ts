@@ -89,18 +89,17 @@ async function validateBitbucketAccount(emailInput: string, tokenInput: string):
     authorization: bitbucketBasicAuthorization(email, token),
   };
   const localPart = email.split("@")[0] ?? email;
-  const repositories = new URL("https://api.bitbucket.org/2.0/repositories");
-  repositories.searchParams.set("role", "member");
-  repositories.searchParams.set("pagelen", "1");
+  const workspaces = new URL("https://api.bitbucket.org/2.0/user/workspaces");
+  workspaces.searchParams.set("pagelen", "1");
 
   let response: Response;
   try {
-    response = await fetch(repositories, { headers });
+    response = await fetch(workspaces, { headers });
   } catch {
     return { ok: false, message: "Could not reach Bitbucket. Check your network and try again." };
   }
 
-  if (response.status === 401 || response.status === 403) return { ok: false, message: "Bitbucket rejected that email and token. Check that the token is active and can read repositories." };
+  if (response.status === 401 || response.status === 403) return { ok: false, message: "Bitbucket rejected that email and token. Check that the token is active and can read repositories and workspaces." };
   if (!response.ok) return { ok: false, message: `Bitbucket token validation failed (${response.status}). Try again.` };
 
   let commitName = localPart;

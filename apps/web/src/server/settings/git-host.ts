@@ -72,7 +72,7 @@ gh auth token</pre>
 function bitbucketConnectionForm(surface: SettingsSurface, error: string): string {
   const connectButton = renderForgeConnectButton("bitbucket", surface);
   return `<form id="${domId(surface, "bitbucket-connect-form")}" class="git-host-connect-form git-host-connect-form--row form-stack" method="post" action="${forgeAction("bitbucket", surface, "connect")}" data-turbo="true">
-    <p>Create an <a href="https://id.atlassian.com/manage-profile/security/api-tokens" target="_blank" rel="noreferrer">API token</a> with repository read. Paste your Atlassian account email and the token here. The token stays outside Agent sandboxes, so Agents can use your Bitbucket repositories without seeing it.</p>
+    <p>Create an <a href="https://id.atlassian.com/manage-profile/security/api-tokens" target="_blank" rel="noreferrer">API token</a> with repository and workspace read. Paste your Atlassian account email and the token here. The token stays outside Agent sandboxes, so Agents can use your Bitbucket repositories without seeing it.</p>
     ${error ? `<p class="settings-error">${escapeHtml(error)}</p>` : ""}
     <input class="settings-input text-field" type="email" name="email" placeholder="Atlassian email" aria-label="Atlassian email" autocomplete="off" data-1p-ignore required>
     <div class="git-host-connect-controls"><input class="settings-input text-field" type="password" data-1p-ignore name="token" placeholder="API token" aria-label="API token" autocomplete="off" required>${connectButton}</div>

@@ -107,7 +107,7 @@ describe("forge auth", () => {
     globalThis.fetch = fetchStub((url, init) => {
       auth = new Headers(init?.headers).get("authorization") ?? "";
       const href = String(url);
-      if (href.startsWith("https://api.bitbucket.org/2.0/repositories")) return Promise.resolve(Response.json({ values: [] }));
+      if (href.startsWith("https://api.bitbucket.org/2.0/user/workspaces")) return Promise.resolve(Response.json({ values: [] }));
       if (href === "https://api.bitbucket.org/2.0/user") return Promise.resolve(Response.json({ display_name: "Ada Lovelace", username: "ada" }));
       throw new Error(`unexpected fetch ${href}`);
     });
@@ -136,11 +136,11 @@ describe("forge auth", () => {
     expect(local.commitEmail).toBe("ada@example.com");
   });
 
-  test("accepts a Bitbucket token that can read repositories when the user profile is forbidden", async () => {
+  test("accepts a Bitbucket token that can read workspaces when the user profile is forbidden", async () => {
     const urls: string[] = [];
     globalThis.fetch = fetchStub((url) => {
       urls.push(String(url));
-      if (String(url).startsWith("https://api.bitbucket.org/2.0/repositories")) return Promise.resolve(Response.json({ values: [] }));
+      if (String(url).startsWith("https://api.bitbucket.org/2.0/user/workspaces")) return Promise.resolve(Response.json({ values: [] }));
       if (url === "https://api.bitbucket.org/2.0/user") return Promise.resolve(new Response("forbidden", { status: 403 }));
       throw new Error(`unexpected fetch ${String(url)}`);
     });
@@ -150,8 +150,8 @@ describe("forge auth", () => {
     if (!result.ok) return;
     expect(result.commitName).toBe("ada");
     expect(result.commitEmail).toBe("ada@example.com");
-    expect(urls[0]).toContain("/2.0/repositories");
-    expect(urls[0]).toContain("role=member");
+    expect(urls[0]).toContain("/2.0/user/workspaces");
+    expect(urls[0]).toContain("pagelen=1");
   });
 
   test("reports rejected Bitbucket credentials", async () => {
@@ -159,13 +159,13 @@ describe("forge auth", () => {
 
     expect(await validateForgeAccount({ forge: "bitbucket", email: "ada@example.com", token: "api-token" })).toEqual({
       ok: false,
-      message: "Bitbucket rejected that email and token. Check that the token is active and can read repositories.",
+      message: "Bitbucket rejected that email and token. Check that the token is active and can read repositories and workspaces.",
     });
   });
 
   test("a malformed Bitbucket profile falls back to the email local part", async () => {
     globalThis.fetch = fetchStub((url) => {
-      if (String(url).startsWith("https://api.bitbucket.org/2.0/repositories")) return Promise.resolve(Response.json({ values: [] }));
+      if (String(url).startsWith("https://api.bitbucket.org/2.0/user/workspaces")) return Promise.resolve(Response.json({ values: [] }));
       return Promise.resolve(Response.json({ display_name: 12 }));
     });
 
@@ -198,7 +198,7 @@ describe("forge auth", () => {
   test("the Bitbucket connect form says where the token comes from", async () => {
     const html = await renderForgeSection("bitbucket");
     expect(html).toContain("https://id.atlassian.com/manage-profile/security/api-tokens");
-    expect(html).toContain("repository");
+    expect(html).toContain("repository and workspace read");
     expect(html).not.toContain("bkt auth login");
   });
 
@@ -235,7 +235,7 @@ describe("forge auth", () => {
     const dataDir = await mkdtemp(join(tmpdir(), "agents-in-the-cloud-bitbucket-onboarding-"));
     process.env.ATELIER_DATA_DIR = dataDir;
     globalThis.fetch = fetchStub((url) => {
-      if (String(url).startsWith("https://api.bitbucket.org/2.0/repositories")) return Promise.resolve(Response.json({ values: [] }));
+      if (String(url).startsWith("https://api.bitbucket.org/2.0/user/workspaces")) return Promise.resolve(Response.json({ values: [] }));
       return Promise.resolve(Response.json({ display_name: "Ada Lovelace" }));
     });
     try {

@@ -79,6 +79,12 @@ function connectBitbucket(token = "bb-token"): void {
   setForgeAccount({ forge: "bitbucket", email, token });
 }
 
+function bitbucketSearchResponse(url: URL, repositories: unknown[]): Response {
+  if (url.pathname === "/2.0/user/workspaces") return Response.json({ values: [{ workspace: { slug: "team" } }] });
+  expect(url.pathname).toBe("/2.0/repositories/team");
+  return Response.json({ values: repositories });
+}
+
 test("explicit forge URLs bypass search while repository names remain searchable", () => {
   expect(shouldSearchRepositories("github.com/octocat/Hello-World")).toBe(false);
   expect(shouldSearchRepositories(" GitHub.com/octocat/Hello-World.git#main ")).toBe(false);
@@ -159,18 +165,25 @@ test("rate limits remain explicit and preserve the retry delay", async () => {
   expect(results.groups.every((group) => group.repositories.length === 0 && group.rateLimit)).toBe(true);
 });
 
-test("Bitbucket search uses Basic auth and role=member, and strips clone userinfo", async () => {
-  connectBitbucket();
+test("Bitbucket search discovers workspaces, uses Basic auth, and strips clone userinfo", async () => {
+  connectBitbucket("workspace-search-token");
   globalThis.fetch = Object.assign(async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
     const url = new URL(String(input));
     requests.push(url);
     if (url.hostname === "api.bitbucket.org") {
-      expect(url.pathname).toBe("/2.0/repositories");
-      expect(url.searchParams.get("role")).toBe("member");
+      expect(new Headers(init?.headers).get("authorization")).toBe(`Basic ${Buffer.from("ada@example.com:workspace-search-token").toString("base64")}`);
+      if (url.pathname === "/2.0/user/workspaces") {
+        expect(url.searchParams.get("pagelen")).toBe("100");
+        return Response.json({ values: [
+          { workspace: { slug: "team" } },
+          { workspace: { slug: "studio" } },
+        ] });
+      }
+      expect(["/2.0/repositories/team", "/2.0/repositories/studio"]).toContain(url.pathname);
       expect(url.searchParams.get("pagelen")).toBe("25");
       expect(url.searchParams.get("q")).toBe('name~"say \\"hi\\""');
-      expect(url.searchParams.has("is_private")).toBe(false);
-      expect(new Headers(init?.headers).get("authorization")).toBe(`Basic ${Buffer.from("ada@example.com:bb-token").toString("base64")}`);
+      expect(url.searchParams.has("role")).toBe(false);
+      if (url.pathname === "/2.0/repositories/studio") return Response.json({ values: [] });
       return Response.json({
         values: [{
           full_name: "team/widget",
@@ -193,7 +206,7 @@ test("Bitbucket search uses Basic auth and role=member, and strips clone userinf
     ["team/widget", "https://bitbucket.org/team/widget.git", true, true],
   ]);
   expect(repositoriesIn(results).some((repo) => repo.fullName === "public/widget")).toBe(true);
-  expect(requests.filter((url) => url.hostname === "api.bitbucket.org")).toHaveLength(1);
+  expect(requests.filter((url) => url.hostname === "api.bitbucket.org")).toHaveLength(3);
 });
 
 test("a Bitbucket rate limit keeps GitHub hits and does not rate-limit the whole menu", async () => {
@@ -253,7 +266,7 @@ test("anonymous GitHub rate limits stay a retry delay", async () => {
 });
 
 test("a Bitbucket service error is not cached", async () => {
-  connectBitbucket();
+  connectBitbucket("service-error-token");
   let bitbucketCalls = 0;
   globalThis.fetch = Object.assign(async (input: Parameters<typeof fetch>[0]) => {
     const url = new URL(String(input));
@@ -291,7 +304,7 @@ test("a bad GitHub user response keeps Bitbucket results", async () => {
   connectBitbucket();
   globalThis.fetch = Object.assign(async (input: Parameters<typeof fetch>[0]) => {
     const url = new URL(String(input));
-    if (url.hostname === "api.bitbucket.org") return Response.json({ values: [{ full_name: "team/kept", is_private: false }] });
+    if (url.hostname === "api.bitbucket.org") return bitbucketSearchResponse(url, [{ full_name: "team/kept", is_private: false }]);
     if (url.pathname === "/user") return Response.json({ login: 1 });
     if (url.pathname === "/user/orgs") return Response.json([]);
     return Response.json({ items: [repository("public/kept")] });
@@ -319,7 +332,7 @@ test("Bitbucket repositories are listed with personal results before public GitH
   globalThis.fetch = Object.assign(async (input: Parameters<typeof fetch>[0]) => {
     const url = new URL(String(input));
     if (url.hostname === "api.bitbucket.org") {
-      return Response.json({ values: [{ full_name: "team/mine", is_private: true }] });
+      return bitbucketSearchResponse(url, [{ full_name: "team/mine", is_private: true }]);
     }
     if (url.pathname === "/user") return Response.json({ login: "me" });
     if (url.pathname === "/user/orgs") return Response.json([]);

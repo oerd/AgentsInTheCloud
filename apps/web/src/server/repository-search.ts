@@ -51,6 +51,13 @@ const bitbucketRepositorySearchResponseSchema = Type.Object({
   })),
 });
 
+const bitbucketWorkspacesResponseSchema = Type.Object({
+  values: Type.Array(Type.Object({
+    workspace: Type.Object({ slug: Type.String({ minLength: 1 }) }),
+  })),
+  next: Type.Optional(Type.String()),
+});
+
 const searchCacheMs = 60_000;
 
 class RepositorySearchRateLimitError extends Error {
@@ -68,6 +75,7 @@ type PageOutcome =
 
 const pageCache = new Map<string, { expiresAt: number; outcome: PageOutcome }>();
 const ownerCache = new Map<string, { expiresAt: number; owners: string[] }>();
+const bitbucketWorkspaceCache = new Map<string, { expiresAt: number; workspaces: string[] }>();
 
 function credentialKey(token: string | undefined): string {
   return token ? createHash("sha256").update(token).digest("hex") : "public";
@@ -147,6 +155,18 @@ async function fetchGitHub(url: URL, token: string | undefined): Promise<Respons
   return response;
 }
 
+async function fetchBitbucket(url: URL, account: Extract<ForgeAccount, { forge: "bitbucket" }>): Promise<Response> {
+  const response = await fetchSearch(url, {
+    headers: {
+      Accept: "application/json",
+      Authorization: bitbucketBasicAuthorization(account.email, account.token),
+    },
+  });
+  if (response.status === 429) throw new RepositorySearchRateLimitError("Bitbucket repository search was rate limited.", retryAfterSeconds(response));
+  if (!response.ok) throw new RepositorySearchRejectedError(`Bitbucket repository search failed: ${response.status}`);
+  return response;
+}
+
 async function repositoryOwners(token: string): Promise<string[]> {
   const key = credentialKey(token);
   const cached = ownerCache.get(key);
@@ -196,6 +216,31 @@ async function readSearchBody<Schema extends TSchema>(response: Response, schema
   return body;
 }
 
+async function bitbucketWorkspaces(account: Extract<ForgeAccount, { forge: "bitbucket" }>): Promise<string[]> {
+  const key = credentialKey(`${account.email}\0${account.token}`);
+  const cached = bitbucketWorkspaceCache.get(key);
+  if (cached && cached.expiresAt > Date.now()) return cached.workspaces;
+
+  const workspaces = new Set<string>();
+  let url: URL | undefined = new URL("https://api.bitbucket.org/2.0/user/workspaces");
+  url.searchParams.set("pagelen", "100");
+  while (url) {
+    const response = await fetchBitbucket(url, account);
+    const body = await readSearchBody(response, bitbucketWorkspacesResponseSchema, "Bitbucket workspace discovery returned an unreadable response.");
+    for (const access of body.values) workspaces.add(access.workspace.slug);
+    if (!body.next) break;
+    const next = new URL(body.next);
+    if (next.origin !== "https://api.bitbucket.org") throw new RepositorySearchRejectedError("Bitbucket workspace discovery returned an invalid next page.");
+    url = next;
+  }
+
+  const result = [...workspaces];
+  const now = Date.now();
+  for (const [cacheKey, entry] of bitbucketWorkspaceCache) if (entry.expiresAt <= now) bitbucketWorkspaceCache.delete(cacheKey);
+  bitbucketWorkspaceCache.set(key, { expiresAt: now + searchCacheMs, workspaces: result });
+  return result;
+}
+
 async function githubPersonalPage(query: string, token: string | undefined): Promise<PageOutcome> {
   const key = pageCacheKey("github", credentialKey(token), query, "personal");
   const cached = cachedPage(key);
@@ -242,40 +287,28 @@ async function bitbucketPersonalPage(query: string, account: Extract<ForgeAccoun
   if (cached) return cached;
   const rejected = "Your Bitbucket repositories could not be searched. Check your Bitbucket connection.";
   const limited = "Your Bitbucket repositories could not be searched: Bitbucket is rate limited. Try again shortly.";
-  const url = new URL("https://api.bitbucket.org/2.0/repositories");
-  url.searchParams.set("role", "member");
-  url.searchParams.set("pagelen", "25");
-  url.searchParams.set("q", bitbucketNameQuery(query));
-  let response: Response;
   try {
-    response = await fetchSearch(url, {
-      headers: {
-        Accept: "application/json",
-        Authorization: bitbucketBasicAuthorization(account.email, account.token),
-      },
-    });
+    const workspaces = await bitbucketWorkspaces(account);
+    const pages = await Promise.all(workspaces.map(async (workspace) => {
+      const url = new URL(`/2.0/repositories/${encodeURIComponent(workspace)}`, "https://api.bitbucket.org");
+      url.searchParams.set("pagelen", "25");
+      url.searchParams.set("q", bitbucketNameQuery(query));
+      const response = await fetchBitbucket(url, account);
+      return readSearchBody(response, bitbucketRepositorySearchResponseSchema, "Bitbucket repository search returned an unreadable response.");
+    }));
+    const repositories = pages.flatMap((body) => body.values).slice(0, 25).map((repo) => ({
+      forge: "bitbucket" as const,
+      fullName: repo.full_name,
+      description: repo.description ?? null,
+      private: repo.is_private,
+      cloneUrl: bitbucketCloneUrl(repo.full_name, repo.links),
+      personal: true,
+    }));
+    return remember(key, { kind: "hits", repositories });
   } catch (error) {
-    if (error instanceof RepositorySearchRejectedError) return { kind: "notice", notice: rejected, attempted: true };
+    if (error instanceof RepositorySearchRateLimitError || error instanceof RepositorySearchRejectedError) return caughtPage(error, rejected, limited);
     throw error;
   }
-  if (response.status === 429) return { kind: "notice", notice: limited, attempted: true, rateLimit: { retryAfterSeconds: retryAfterSeconds(response) } };
-  if (!response.ok) return { kind: "notice", notice: rejected, attempted: true };
-  let body: Static<typeof bitbucketRepositorySearchResponseSchema>;
-  try {
-    body = await readSearchBody(response, bitbucketRepositorySearchResponseSchema, "Bitbucket repository search returned an unreadable response.");
-  } catch (error) {
-    if (error instanceof RepositorySearchRejectedError) return { kind: "notice", notice: rejected, attempted: true };
-    throw error;
-  }
-  const repositories = body.values.map((repo) => ({
-    forge: "bitbucket" as const,
-    fullName: repo.full_name,
-    description: repo.description ?? null,
-    private: repo.is_private,
-    cloneUrl: bitbucketCloneUrl(repo.full_name, repo.links),
-    personal: true,
-  }));
-  return remember(key, { kind: "hits", repositories });
 }
 
 function unseen(repositories: readonly RepositoryHit[], seen: Set<string>): RepositoryHit[] {
