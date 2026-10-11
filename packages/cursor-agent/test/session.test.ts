@@ -2,24 +2,27 @@ import { expect, test } from "bun:test";
 import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { cursorRuntimeScript, cursorSessionFiles, cursorSharedHomeScript, acceptCursorChatId, cursorAuthDecision, cursorPromptReply, cursorSessionStartReply, cursorStopBoundary, cursorStopReply, cursorTurnBoundary, identifyCursorPane, mergeCursorHooks, mergeCursorMcp, parseCursorChatId, parseCursorConnection, parseCursorHooksFile, parseCursorMcpFile, parseCursorStopStatus, prepareCursorSession, readCursorChatId, type CursorOwnedHooks } from "../src/server/session.ts";
+import { cursorMcpAuthorization, cursorRuntimeScript, cursorSessionDirEnv, cursorSessionFiles, cursorSharedHomeScript, acceptCursorChatId, cursorAuthDecision, cursorMcpTokenEnv, cursorPromptReply, cursorSessionStartReply, cursorStopBoundary, cursorStopReply, cursorTurnBoundary, mergeCursorHooks, mergeCursorMcp, parseCursorChatId, parseCursorStopStatus, prepareCursorSession, readCursorChatId, type CursorOwnedHooks } from "../src/server/session.ts";
 
 const sessionId = "11111111-2222-4333-8444-555555555555";
+const relayUrl = "http://127.0.0.1:9/mcp";
 const owned: CursorOwnedHooks = {
   sessionStart: "node /rt/runtime.mjs hook session-start",
   beforeSubmitPrompt: "node /rt/runtime.mjs hook prompt",
   stop: "node /rt/runtime.mjs hook stop",
 };
+const freshHooks = {
+  version: 1,
+  hooks: {
+    sessionStart: [{ command: owned.sessionStart }],
+    beforeSubmitPrompt: [{ command: owned.beforeSubmitPrompt }],
+    stop: [{ command: owned.stop }],
+  },
+};
+const httpServer = { url: relayUrl, headers: { Authorization: cursorMcpAuthorization } };
 const fixtureDir = join(import.meta.dir, "fixtures");
 
-test("pane names, connections, and chat ids accept only the captured shapes", () => {
-  expect(identifyCursorPane(`cursor-${sessionId}`)).toEqual({ kind: "ours", sessionId });
-  expect(identifyCursorPane("cursor-not-a-uuid")).toEqual({ kind: "foreign" });
-  expect(identifyCursorPane(`claude-${sessionId}`)).toEqual({ kind: "foreign" });
-  expect(parseCursorConnection({ url: "http://127.0.0.1:2988/mcp", token: "sekret" })).toEqual({ url: "http://127.0.0.1:2988/mcp", token: "sekret" });
-  expect(() => parseCursorConnection({ url: "http://127.0.0.1:9/mcp", token: "sekret" })).toThrow("workspace MCP relay");
-  expect(() => parseCursorConnection({ url: "http://127.0.0.1:2988/mcp", token: "sekret", extra: true })).toThrow("unexpected keys");
-  expect(() => parseCursorConnection({ url: "http://127.0.0.1:2988/mcp", token: "" })).toThrow("token is invalid");
+test("chat ids accept only a single UUID line", () => {
   expect(parseCursorChatId(undefined)).toBeUndefined();
   expect(acceptCursorChatId(`${sessionId}\n`)).toBe(sessionId);
   expect(() => acceptCursorChatId("-1\n")).toThrow("not a UUID");
@@ -39,22 +42,22 @@ test("stop replies finish only completed turns and never ask for a follow-up", (
   expect(cursorSessionStartReply("Use the workspace tools.")).toEqual({ additional_context: "Use the workspace tools." });
 });
 
-test("status decisions follow captured agent status documents and reject schema drift", async () => {
+test("status decisions use the required flags and ignore unknown profile fields", async () => {
   const unauthenticated = JSON.parse(await readFile(join(fixtureDir, "status-unauthenticated.json"), "utf8"));
   const authenticated = JSON.parse(await readFile(join(fixtureDir, "status-authenticated-no-profile.json"), "utf8"));
   const partial = JSON.parse(await readFile(join(fixtureDir, "status-partial.json"), "utf8"));
   expect(cursorAuthDecision(unauthenticated)).toBe("logged-out");
   expect(cursorAuthDecision(authenticated)).toBe("logged-in");
   expect(cursorAuthDecision(partial)).toBe("logged-out");
+  expect(cursorAuthDecision({ ...authenticated, endpoint: "https://api2.cursor.sh" })).toBe("logged-in");
   expect(cursorAuthDecision({
     status: "authenticated",
     isAuthenticated: true,
     hasAccessToken: true,
     hasRefreshToken: true,
-    userInfo: { email: "ada@example.com", userId: 42, teamName: "Analytical" },
+    userInfo: { email: "ada@example.com", userId: 42, teamName: "Analytical", plan: "pro", teamId: null },
   })).toBe("logged-in");
   expect(() => cursorAuthDecision({ status: "error", message: "Status check error: boom" })).toThrow("not the captured document");
-  expect(() => cursorAuthDecision({ ...authenticated, endpoint: "https://api2.cursor.sh" })).toThrow("not in the captured schema: endpoint");
   expect(() => cursorAuthDecision({
     status: "authenticated",
     isAuthenticated: false,
@@ -62,21 +65,16 @@ test("status decisions follow captured agent status documents and reject schema 
     hasRefreshToken: true,
     message: "Logged in (unable to fetch user details)",
   })).toThrow("do not match the captured schema");
-  expect(() => cursorAuthDecision({
-    status: "authenticated",
-    isAuthenticated: true,
-    hasAccessToken: true,
-    hasRefreshToken: true,
-    userInfo: { email: "ada@example.com", plan: "pro" },
-  })).toThrow("userInfo field is not in the captured schema: plan");
+  expect(() => cursorAuthDecision({ status: "authenticated" })).toThrow("not the captured document");
 });
 
-test("hook and MCP merges keep foreign entries and replace only our commands", () => {
+test("hook and MCP merges keep foreign entries and replace only our server", () => {
   const existingHooks = {
-    version: 1 as const,
+    version: 1,
     disableAllHooks: false,
+    extra: { keep: true },
     hooks: {
-      beforeSubmitPrompt: [{ command: "./hooks/audit.sh", timeout: 30 }, { command: "node /old/runtime.mjs hook prompt" }],
+      beforeSubmitPrompt: [{ command: "./hooks/audit.sh", timeout: 30, loop_limit: 2 }, { command: "node /old/runtime.mjs hook prompt" }],
       stop: [{ command: "node /old/runtime.mjs hook stop" }],
       preToolUse: [{ command: "./hooks/allow.sh" }],
     },
@@ -84,8 +82,9 @@ test("hook and MCP merges keep foreign entries and replace only our commands", (
   const mergedHooks = {
     version: 1,
     disableAllHooks: false,
+    extra: { keep: true },
     hooks: {
-      beforeSubmitPrompt: [{ command: "./hooks/audit.sh", timeout: 30 }, { command: owned.beforeSubmitPrompt }],
+      beforeSubmitPrompt: [{ command: "./hooks/audit.sh", timeout: 30, loop_limit: 2 }, { command: owned.beforeSubmitPrompt }],
       preToolUse: [{ command: "./hooks/allow.sh" }],
       sessionStart: [{ command: owned.sessionStart }],
       stop: [{ command: owned.stop }],
@@ -93,42 +92,49 @@ test("hook and MCP merges keep foreign entries and replace only our commands", (
   };
   expect(mergeCursorHooks(existingHooks, owned)).toEqual(mergedHooks);
   expect(mergeCursorHooks(mergedHooks, owned)).toEqual(mergedHooks);
-  expect(parseCursorHooksFile(undefined)).toBeUndefined();
-  expect(() => parseCursorHooksFile("{")).toThrow();
-  expect(() => parseCursorHooksFile('{"version":1,"hooks":{"stop":["nope"]}}')).toThrow("event stop is invalid");
-  const existingMcp = { mcpServers: { other: { command: "python", args: ["server.py"] } } };
-  const bridge = { command: "node" as const, args: ["/rt/runtime.mjs", "mcp"] as const };
-  const mergedMcp = { mcpServers: { other: { command: "python", args: ["server.py"] }, "agents-in-the-cloud": bridge } };
-  expect(mergeCursorMcp(existingMcp, bridge)).toEqual(mergedMcp);
-  expect(mergeCursorMcp(mergedMcp, bridge)).toEqual(mergedMcp);
-  expect(parseCursorMcpFile(undefined)).toBeUndefined();
-  expect(() => parseCursorMcpFile('{"mcpServers":{"other":"nope"}}')).toThrow("server other is invalid");
+  expect(mergeCursorHooks(undefined, owned)).toEqual(freshHooks);
+  expect(() => mergeCursorHooks(JSON.parse('{"version":1,"hooks":{"stop":["nope"]}}'), owned)).toThrow("event stop is invalid");
+  expect(() => mergeCursorHooks("{", owned)).toThrow("hooks.json is invalid");
+  const existingMcp = {
+    extra: true,
+    mcpServers: { other: { command: "python", args: ["server.py"], envFile: "/tmp/env", auth: { CLIENT_ID: "abc" } } },
+  };
+  const mergedMcp = {
+    extra: true,
+    mcpServers: {
+      other: { command: "python", args: ["server.py"], envFile: "/tmp/env", auth: { CLIENT_ID: "abc" } },
+      "agents-in-the-cloud": httpServer,
+    },
+  };
+  expect(mergeCursorMcp(existingMcp, relayUrl)).toEqual(mergedMcp);
+  expect(mergeCursorMcp(mergedMcp, relayUrl)).toEqual(mergedMcp);
+  expect(mergeCursorMcp(undefined, relayUrl)).toEqual({ mcpServers: { "agents-in-the-cloud": httpServer } });
+  expect(() => mergeCursorMcp(JSON.parse('{"mcpServers":{"other":"nope"}}'), relayUrl)).toThrow("server other is invalid");
+  expect(cursorMcpAuthorization).toBe("Bearer ${env:AGENTS_IN_THE_CLOUD_MCP_TOKEN}");
 });
 
-test("session files keep the bearer token out of the shared-home script", () => {
-  const session = { id: sessionId, directory: "/session", turnSignalCommand: "/session/turn-signal.sh" };
-  const files = cursorSessionFiles({ url: "http://127.0.0.1:2988/mcp", token: "sekret", instructions: "Guide the workspace." });
-  expect(JSON.parse(files["cursor/connection.json"])).toEqual({ url: "http://127.0.0.1:2988/mcp", token: "sekret" });
+test("session files store the connection URL and keep the token out of the shared-home script", () => {
+  const files = cursorSessionFiles({ url: relayUrl, token: "sekret", instructions: "Guide the workspace." });
+  expect(JSON.parse(files["cursor/connection.json"])).toEqual({ url: relayUrl, token: "sekret" });
   expect(files["cursor/instructions.txt"]).toBe("Guide the workspace.");
-  expect(cursorSharedHomeScript(session)).not.toContain("sekret");
-  expect(cursorRuntimeScript()).not.toContain("sekret");
+  const script = cursorSharedHomeScript(relayUrl);
+  expect(script).not.toContain("sekret");
+  expect(script).toContain(relayUrl);
+  expect(script).not.toContain("/proc/");
+  expect(script).not.toContain("sessions/");
+  const runtime = cursorRuntimeScript();
+  expect(runtime).not.toContain("sekret");
+  expect(runtime).not.toContain("/proc/");
+  expect(runtime).not.toContain("TMUX_PANE");
+  expect(runtime).toContain(cursorMcpAuthorization);
 });
 
 async function runtimeHome() {
   const home = await mkdtemp(join(tmpdir(), "cursor-runtime-"));
   const directory = join(home, "session");
-  await mkdir(join(home, ".cursor/agents-in-the-cloud/sessions"), { recursive: true });
-  await mkdir(join(home, "bin"), { recursive: true });
   await mkdir(join(directory, "cursor"), { recursive: true });
-  const runtime = join(home, ".cursor/agents-in-the-cloud/runtime.mjs");
+  const runtime = join(home, "runtime.mjs");
   await writeFile(runtime, cursorRuntimeScript());
-  await writeFile(join(home, ".cursor/agents-in-the-cloud/sessions", sessionId), `${directory}\n`);
-  await writeFile(join(home, "bin/tmux"), `#!/bin/sh
-if [ "$1" = display-message ]; then printf '%s\\n' "$CURSOR_TEST_SESSION"; exit 0; fi
-echo "unexpected tmux $*" >&2
-exit 1
-`);
-  await chmod(join(home, "bin/tmux"), 0o755);
   return { home, directory, runtime };
 }
 
@@ -137,62 +143,62 @@ function runNode(runtime: string, args: string[], stdin: string, env: NodeJS.Pro
   return Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
 }
 
-test("the embedded runtime parses status, chat ids, hooks, and foreign panes", async () => {
-  const { home, directory, runtime } = await runtimeHome();
+function foreignEnv(home: string): NodeJS.ProcessEnv {
+  const env = { ...process.env, HOME: home };
+  delete env[cursorSessionDirEnv];
+  delete env.TMUX_PANE;
+  return env;
+}
+
+test("the embedded runtime parses status and chat ids, and a pane without our session env is foreign", async () => {
+  const { home, runtime } = await runtimeHome();
   try {
     const check = Bun.spawn(["node", "--check", runtime], { stdout: "pipe", stderr: "pipe" });
     expect(await check.exited).toBe(0);
-    const env = { ...process.env, HOME: home, PATH: `${home}/bin:${process.env.PATH}`, CURSOR_TEST_SESSION: "dev", TMUX_PANE: "%1" };
+    const env = foreignEnv(home);
     expect((await runNode(runtime, ["auth-status"], await readFile(join(fixtureDir, "status-unauthenticated.json"), "utf8"), env))[0]).toBe(10);
     expect((await runNode(runtime, ["auth-status"], await readFile(join(fixtureDir, "status-authenticated-no-profile.json"), "utf8"), env))[0]).toBe(0);
+    const drifted = JSON.parse(await readFile(join(fixtureDir, "status-authenticated-no-profile.json"), "utf8"));
+    expect((await runNode(runtime, ["auth-status"], JSON.stringify({ ...drifted, endpoint: "https://api2.cursor.sh", userInfo: { plan: "pro", teamId: null } }), env))[0]).toBe(0);
     expect((await runNode(runtime, ["auth-status"], await readFile(join(fixtureDir, "status-partial.json"), "utf8"), env))[0]).toBe(10);
     expect((await runNode(runtime, ["auth-status"], '{"status":"error","message":"Status check error: boom"}', env))[0]).toBe(1);
     const [chatCode, chatOut] = await runNode(runtime, ["accept-chat-id"], `${sessionId}\n`, env);
     expect(chatCode).toBe(0);
     expect(chatOut).toBe(`${sessionId}\n`);
     expect((await runNode(runtime, ["accept-chat-id"], "-1\n", env))[0]).toBe(1);
-    const rawHooks = JSON.stringify({ version: 1, hooks: { stop: [{ command: "./keep.sh" }, { command: "node /old/runtime.mjs hook stop" }] } });
+    const rawHooks = JSON.stringify({
+      version: 1,
+      extra: { keep: true },
+      hooks: { stop: [{ command: "./keep.sh", loop_limit: 3 }, { command: "node /old/runtime.mjs hook stop" }] },
+    });
     const [mergeCode, mergeOut] = await runNode(runtime, ["merge-hooks", owned.sessionStart, owned.beforeSubmitPrompt, owned.stop], rawHooks, env);
     expect(mergeCode).toBe(0);
     expect(JSON.parse(mergeOut)).toEqual(mergeCursorHooks(JSON.parse(rawHooks), owned));
-    await writeFile(join(directory, "turn-signal.sh"), "#!/bin/sh\nprintf '%s\\n' \"$1\" >> \"$HOME/signals\"\nexit 1\n");
+    const rawMcp = JSON.stringify({ extra: true, mcpServers: { other: { command: "python", envFile: "/tmp/env" } } });
+    const [mcpCode, mcpOut] = await runNode(runtime, ["merge-mcp", relayUrl], rawMcp, env);
+    expect(mcpCode).toBe(0);
+    expect(JSON.parse(mcpOut)).toEqual(mergeCursorMcp(JSON.parse(rawMcp), relayUrl));
+    expect(mcpOut).not.toContain("sekret");
     const foreign = await runNode(runtime, ["hook", "prompt"], "{}\n", env);
     expect(foreign[0]).toBe(0);
     expect(JSON.parse(foreign[1])).toEqual({ continue: true });
+    expect(foreign[2]).toBe("");
     expect(await Bun.file(join(home, "signals")).exists()).toBe(false);
-    const noPaneEnv = { ...env };
-    delete noPaneEnv.TMUX_PANE;
-    const noPane = await runNode(runtime, ["hook", "stop"], '{"status":"completed"}\n', noPaneEnv);
-    expect(noPane[0]).toBe(0);
-    expect(JSON.parse(noPane[1])).toEqual({});
-    expect(noPane[2]).toContain("cursor hook: no TMUX_PANE");
+    const inheritedPane = await runNode(runtime, ["hook", "stop"], '{"status":"completed"}\n', { ...env, TMUX_PANE: "%0" });
+    expect(inheritedPane[0]).toBe(0);
+    expect(JSON.parse(inheritedPane[1])).toEqual({});
+    expect(inheritedPane[2]).toBe("");
+    expect(await Bun.file(join(home, "signals")).exists()).toBe(false);
   } finally { await rm(home, { recursive: true, force: true }); }
 });
 
-test("our pane signals turns, injects instructions, and bridges MCP with the session token", async () => {
+test("our session env signals turns and injects instructions without reading the pane", async () => {
   const { home, directory, runtime } = await runtimeHome();
-  const server = Bun.serve({
-    hostname: "127.0.0.1",
-    port: 2988,
-    async fetch(request) {
-      if (new URL(request.url).pathname !== "/mcp") return new Response("nope", { status: 404 });
-      if (request.headers.get("authorization") !== "Bearer sekret") return new Response("unauthorized", { status: 401 });
-      const body = await request.json();
-      if (body.method === "initialize") {
-        return Response.json({ jsonrpc: "2.0", id: body.id, result: { protocolVersion: "2025-03-26", capabilities: { tools: {} }, serverInfo: { name: "agents-in-the-cloud", version: "1.0.0" } } }, { headers: { "mcp-session-id": "sess-1" } });
-      }
-      if (body.method === "notifications/initialized") return new Response(null, { status: 202 });
-      if (request.headers.get("mcp-session-id") !== "sess-1") return new Response("missing session", { status: 400 });
-      if (request.headers.get("mcp-protocol-version") !== "2025-03-26") return new Response("missing protocol", { status: 400 });
-      if (body.method === "tools/list") return Response.json({ jsonrpc: "2.0", id: body.id, result: { tools: [{ name: "present" }] } });
-      return new Response("unexpected", { status: 400 });
-    },
-  });
   try {
     await writeFile(join(directory, "cursor/instructions.txt"), "Guide \"the\" workspace.");
-    await writeFile(join(directory, "cursor/connection.json"), JSON.stringify({ url: "http://127.0.0.1:2988/mcp", token: "sekret" }));
     await writeFile(join(directory, "turn-signal.sh"), "#!/bin/sh\nprintf '%s\\n' \"$1\" >> \"$HOME/signals\"\nexit 1\n");
-    const env = { ...process.env, HOME: home, PATH: `${home}/bin:${process.env.PATH}`, CURSOR_TEST_SESSION: `cursor-${sessionId}`, TMUX_PANE: "%1" };
+    await chmod(join(directory, "turn-signal.sh"), 0o755);
+    const env = { ...foreignEnv(home), [cursorSessionDirEnv]: directory, TMUX_PANE: "%0" };
     const started = await runNode(runtime, ["hook", "prompt"], '{"prompt":"hi"}\n', env);
     expect(started[0]).toBe(0);
     expect(JSON.parse(started[1])).toEqual({ continue: true });
@@ -208,74 +214,62 @@ test("our pane signals turns, injects instructions, and bridges MCP with the ses
     const unknown = await runNode(runtime, ["hook", "stop"], '{"status":"nope"}\n', env);
     expect(unknown[0]).toBe(1);
     expect(unknown[2]).toContain("Unknown Cursor stop status: nope");
-    const foreignMcp = await runNode(runtime, ["mcp"], "", { ...env, CURSOR_TEST_SESSION: "dev" });
-    expect(foreignMcp[0]).toBe(1);
-    expect(foreignMcp[2]).toContain("cursor mcp: foreign pane");
-    const child = Bun.spawn(["node", runtime, "mcp"], { env, stdin: "pipe", stdout: "pipe", stderr: "pipe" });
-    child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-03-26", capabilities: {}, clientInfo: { name: "test", version: "1" } } })}\n`);
-    child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" })}\n`);
-    child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/list", params: {} })}\n`);
-    child.stdin.end();
-    const [code, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
-    expect({ code, stderr }).toEqual({ code: 0, stderr: "" });
-    expect(stdout).not.toContain("sekret");
-    expect(stdout.trim().split("\n").map(line => JSON.parse(line))).toEqual([
-      { jsonrpc: "2.0", id: 1, result: { protocolVersion: "2025-03-26", capabilities: { tools: {} }, serverInfo: { name: "agents-in-the-cloud", version: "1.0.0" } } },
-      { jsonrpc: "2.0", id: 2, result: { tools: [{ name: "present" }] } },
-    ]);
-  } finally {
-    server.stop(true);
-    await rm(home, { recursive: true, force: true });
-  }
+    expect((await runNode(runtime, ["mcp"], "", env))[0]).toBe(1);
+  } finally { await rm(home, { recursive: true, force: true }); }
 });
 
-test("shared-home prepare rewrites hooks and MCP under the flock without the token", async () => {
+test("shared-home prepare rewrites hooks and HTTP MCP under the flock without the token", async () => {
   const home = await mkdtemp(join(tmpdir(), "cursor-home-"));
-  const directory = join(home, "session");
-  const session = { id: sessionId, directory, turnSignalCommand: `${directory}/turn-signal.sh` };
+  const url = relayUrl;
   try {
     await mkdir(join(home, ".cursor"), { recursive: true });
     await writeFile(join(home, ".cursor/hooks.json"), JSON.stringify({
       version: 1,
-      hooks: { beforeSubmitPrompt: [{ command: "./hooks/audit.sh" }, { command: "node /old/runtime.mjs hook prompt" }] },
+      extra: { keep: true },
+      hooks: { beforeSubmitPrompt: [{ command: "./hooks/audit.sh", loop_limit: 2 }, { command: "node /old/runtime.mjs hook prompt" }] },
     }));
-    await writeFile(join(home, ".cursor/mcp.json"), JSON.stringify({ mcpServers: { other: { command: "python", args: ["server.py"] } } }));
-    const child = Bun.spawn(["sh", "-c", cursorSharedHomeScript(session)], {
+    await writeFile(join(home, ".cursor/mcp.json"), JSON.stringify({
+      extra: true,
+      mcpServers: { other: { command: "python", args: ["server.py"], envFile: "/tmp/env" } },
+    }));
+    const child = Bun.spawn(["sh", "-c", cursorSharedHomeScript(url)], {
       env: { ...process.env, HOME: home }, stdin: new Blob([cursorRuntimeScript()]), stdout: "pipe", stderr: "pipe",
     });
     const [code, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
     expect({ code, stdout, stderr }).toEqual({ code: 0, stdout: "", stderr: "" });
     const runtime = join(home, ".cursor/agents-in-the-cloud/runtime.mjs");
     expect((await stat(runtime)).mode & 0o777).toBe(0o700);
-    expect(await readFile(join(home, ".cursor/agents-in-the-cloud/sessions", sessionId), "utf8")).toBe(`${directory}\n`);
+    expect(await Bun.file(join(home, ".cursor/agents-in-the-cloud/sessions", sessionId)).exists()).toBe(false);
     const hooks = JSON.parse(await readFile(join(home, ".cursor/hooks.json"), "utf8"));
     expect(hooks).toEqual({
       version: 1,
+      extra: { keep: true },
       hooks: {
-        beforeSubmitPrompt: [{ command: "./hooks/audit.sh" }, { command: `node ${runtime} hook prompt` }],
+        beforeSubmitPrompt: [{ command: "./hooks/audit.sh", loop_limit: 2 }, { command: `node ${runtime} hook prompt` }],
         sessionStart: [{ command: `node ${runtime} hook session-start` }],
         stop: [{ command: `node ${runtime} hook stop` }],
       },
     });
     expect(JSON.parse(await readFile(join(home, ".cursor/mcp.json"), "utf8"))).toEqual({
+      extra: true,
       mcpServers: {
-        other: { command: "python", args: ["server.py"] },
-        "agents-in-the-cloud": { command: "node", args: [runtime, "mcp"] },
+        other: { command: "python", args: ["server.py"], envFile: "/tmp/env" },
+        "agents-in-the-cloud": { url, headers: { Authorization: cursorMcpAuthorization } },
       },
     });
     expect(await readFile(join(home, ".cursor/mcp.json"), "utf8")).not.toContain("sekret");
     expect((await stat(join(home, ".cursor/hooks.json"))).mode & 0o777).toBe(0o600);
-    const again = Bun.spawn(["sh", "-c", cursorSharedHomeScript(session)], { env: { ...process.env, HOME: home }, stdin: new Blob([cursorRuntimeScript()]), stdout: "pipe", stderr: "pipe" });
+    const again = Bun.spawn(["sh", "-c", cursorSharedHomeScript(url)], { env: { ...process.env, HOME: home }, stdin: new Blob([cursorRuntimeScript()]), stdout: "pipe", stderr: "pipe" });
     expect(await again.exited).toBe(0);
     expect(JSON.parse(await readFile(join(home, ".cursor/hooks.json"), "utf8"))).toEqual(hooks);
     await writeFile(join(home, ".cursor/hooks.json"), "{");
-    const broken = Bun.spawn(["sh", "-c", cursorSharedHomeScript(session)], { env: { ...process.env, HOME: home }, stdin: new Blob([cursorRuntimeScript()]), stdout: "pipe", stderr: "pipe" });
+    const broken = Bun.spawn(["sh", "-c", cursorSharedHomeScript(url)], { env: { ...process.env, HOME: home }, stdin: new Blob([cursorRuntimeScript()]), stdout: "pipe", stderr: "pipe" });
     expect(await broken.exited).not.toBe(0);
     expect(await readFile(join(home, ".cursor/hooks.json"), "utf8")).toBe("{");
   } finally { await rm(home, { recursive: true, force: true }); }
 });
 
-test("prepareCursorSession returns no environment and keeps the token in the session file", async () => {
+test("prepareCursorSession returns the pane env and stores the given connection URL", async () => {
   const source = join(import.meta.dir, "../src/server/session.ts");
   const child = Bun.spawn([process.execPath, "-e", `
     import { expect, mock } from "bun:test";
@@ -283,16 +277,22 @@ test("prepareCursorSession returns no environment and keeps the token in the ses
     const writes = [];
     const shells = [];
     mock.module("@agents-in-the-cloud/cli-agent/server", () => ({ ...cli, writeCliSessionFiles: async (...args) => { writes.push(args); }, checkedWorkspaceShell: async (...args) => { shells.push(args); } }));
-    const { prepareCursorSession, cursorRuntimeScript } = await import(${JSON.stringify(source)});
+    const { prepareCursorSession, cursorRuntimeScript, cursorSessionDirEnv, cursorMcpTokenEnv } = await import(${JSON.stringify(source)});
     const session = { id: ${JSON.stringify(sessionId)}, directory: "/session", turnSignalCommand: "/session/turn-signal.sh" };
-    expect(await prepareCursorSession("workspace", session, { url: "http://127.0.0.1:2988/mcp", token: "sekret", instructions: "Guide." })).toEqual({});
-    expect(JSON.parse(writes[0][2]["cursor/connection.json"])).toEqual({ url: "http://127.0.0.1:2988/mcp", token: "sekret" });
+    expect(await prepareCursorSession("workspace", session, { url: ${JSON.stringify(relayUrl)}, token: "sekret", instructions: "Guide." })).toEqual({
+      [cursorSessionDirEnv]: "/session",
+      [cursorMcpTokenEnv]: "sekret",
+    });
+    expect(JSON.parse(writes[0][2]["cursor/connection.json"])).toEqual({ url: ${JSON.stringify(relayUrl)}, token: "sekret" });
     expect(writes[0][2]["cursor/instructions.txt"]).toBe("Guide.");
     expect(shells[0][0]).toBe("workspace");
     expect(shells[0][1]).toContain("flock 9");
+    expect(shells[0][1]).toContain(${JSON.stringify(relayUrl)});
     expect(shells[0][1]).not.toContain("sekret");
+    expect(shells[0][1]).not.toContain("sessions/");
     expect(shells[0][2]).toBe(cursorRuntimeScript());
     expect(shells[0][2]).not.toContain("sekret");
+    expect(shells[0][2]).not.toContain("/proc/");
   `], { cwd: join(import.meta.dir, ".."), stdout: "pipe", stderr: "pipe" });
   const [code, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
   expect({ code, stdout, stderr }).toEqual({ code: 0, stdout: "", stderr: "" });
