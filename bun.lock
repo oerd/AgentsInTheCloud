@@ -24,11 +24,13 @@
         "@agents-in-the-cloud/changes": "workspace:*",
         "@agents-in-the-cloud/claude-agent": "workspace:*",
         "@agents-in-the-cloud/cli-agent": "workspace:*",
-        "@agents-in-the-cloud/codex-cli-agent": "workspace:*",
         "@agents-in-the-cloud/codex-agent": "workspace:*",
+        "@agents-in-the-cloud/codex-cli-agent": "workspace:*",
         "@agents-in-the-cloud/core": "workspace:*",
+        "@agents-in-the-cloud/cursor-agent": "workspace:*",
         "@agents-in-the-cloud/design-system": "workspace:*",
         "@agents-in-the-cloud/desktop": "workspace:*",
+        "@agents-in-the-cloud/dictation": "workspace:*",
         "@agents-in-the-cloud/files": "workspace:*",
         "@agents-in-the-cloud/host": "workspace:*",
         "@agents-in-the-cloud/inline-content": "workspace:*",
@@ -39,7 +41,6 @@
         "@agents-in-the-cloud/proxy-ingress": "workspace:*",
         "@agents-in-the-cloud/shared": "workspace:*",
         "@agents-in-the-cloud/subagents": "workspace:*",
-        "@agents-in-the-cloud/dictation": "workspace:*",
         "@agents-in-the-cloud/update": "workspace:*",
         "@agents-in-the-cloud/vscode": "workspace:*",
         "@agents-in-the-cloud/workspace": "workspace:*",
@@ -101,13 +102,13 @@
         "@agents-in-the-cloud/agent": "workspace:*",
         "@agents-in-the-cloud/core": "workspace:*",
         "@agents-in-the-cloud/design-system": "workspace:*",
+        "@agents-in-the-cloud/dictation": "workspace:*",
         "@agents-in-the-cloud/legacy-converter": "workspace:*",
         "@agents-in-the-cloud/llm": "workspace:*",
         "@agents-in-the-cloud/markdown": "workspace:*",
         "@agents-in-the-cloud/observable-terminal": "workspace:*",
         "@agents-in-the-cloud/prompt": "workspace:*",
         "@agents-in-the-cloud/shared": "workspace:*",
-        "@agents-in-the-cloud/dictation": "workspace:*",
         "@agents-in-the-cloud/workspace": "workspace:*",
         "@agents-in-the-cloud/workspace-templates": "workspace:*",
         "@earendil-works/chord": "catalog:",
@@ -154,22 +155,10 @@
         "@agents-in-the-cloud/agent": "workspace:*",
         "@agents-in-the-cloud/core": "workspace:*",
         "@agents-in-the-cloud/design-system": "workspace:*",
+        "@agents-in-the-cloud/dictation": "workspace:*",
         "@agents-in-the-cloud/llm": "workspace:*",
         "@agents-in-the-cloud/observable-terminal": "workspace:*",
         "@agents-in-the-cloud/prompt": "workspace:*",
-        "@agents-in-the-cloud/shared": "workspace:*",
-        "@agents-in-the-cloud/dictation": "workspace:*",
-        "@agents-in-the-cloud/workspace": "workspace:*",
-        "typebox": "^1.0.57",
-      },
-    },
-    "packages/codex-cli-agent": {
-      "name": "@agents-in-the-cloud/codex-cli-agent",
-      "dependencies": {
-        "@agents-in-the-cloud/agent": "workspace:*",
-        "@agents-in-the-cloud/cli-agent": "workspace:*",
-        "@agents-in-the-cloud/core": "workspace:*",
-        "@agents-in-the-cloud/llm": "workspace:*",
         "@agents-in-the-cloud/shared": "workspace:*",
         "@agents-in-the-cloud/workspace": "workspace:*",
         "typebox": "^1.0.57",
@@ -190,10 +179,31 @@
         "typebox": "^1.0.57",
       },
     },
+    "packages/codex-cli-agent": {
+      "name": "@agents-in-the-cloud/codex-cli-agent",
+      "dependencies": {
+        "@agents-in-the-cloud/agent": "workspace:*",
+        "@agents-in-the-cloud/cli-agent": "workspace:*",
+        "@agents-in-the-cloud/core": "workspace:*",
+        "@agents-in-the-cloud/llm": "workspace:*",
+        "@agents-in-the-cloud/shared": "workspace:*",
+        "@agents-in-the-cloud/workspace": "workspace:*",
+        "typebox": "^1.0.57",
+      },
+    },
     "packages/core": {
       "name": "@agents-in-the-cloud/core",
       "dependencies": {
         "typebox": "^1.0.57",
+      },
+    },
+    "packages/cursor-agent": {
+      "name": "@agents-in-the-cloud/cursor-agent",
+      "dependencies": {
+        "@agents-in-the-cloud/cli-agent": "workspace:*",
+        "@agents-in-the-cloud/core": "workspace:*",
+        "@agents-in-the-cloud/shared": "workspace:*",
+        "@agents-in-the-cloud/workspace": "workspace:*",
       },
     },
     "packages/design-system": {
@@ -216,6 +226,18 @@
         "@agents-in-the-cloud/workspace": "workspace:*",
         "@hotwired/stimulus": "github:hotwired/dev-builds#339df548999c34d440e04c24b59ad9dc57ce3eb1",
         "@novnc/novnc": "1.7.0",
+        "typebox": "^1.0.57",
+      },
+    },
+    "packages/dictation": {
+      "name": "@agents-in-the-cloud/dictation",
+      "dependencies": {
+        "@agents-in-the-cloud/core": "workspace:*",
+        "@agents-in-the-cloud/design-system": "workspace:*",
+        "@agents-in-the-cloud/observable-terminal": "workspace:*",
+        "@agents-in-the-cloud/shared": "workspace:*",
+        "@agents-in-the-cloud/workspace": "workspace:*",
+        "@agents-in-the-cloud/workspace-templates": "workspace:*",
         "typebox": "^1.0.57",
       },
     },
@@ -337,8 +359,8 @@
       "dependencies": {
         "@agents-in-the-cloud/core": "workspace:*",
         "@agents-in-the-cloud/design-system": "workspace:*",
-        "@agents-in-the-cloud/shared": "workspace:*",
         "@agents-in-the-cloud/dictation": "workspace:*",
+        "@agents-in-the-cloud/shared": "workspace:*",
         "@agents-in-the-cloud/workspace": "workspace:*",
       },
     },
@@ -400,18 +422,6 @@
         "@shikijs/core": "4.4.3",
         "@shikijs/engine-oniguruma": "4.4.3",
         "@shikijs/langs": "4.4.3",
-      },
-    },
-    "packages/dictation": {
-      "name": "@agents-in-the-cloud/dictation",
-      "dependencies": {
-        "@agents-in-the-cloud/core": "workspace:*",
-        "@agents-in-the-cloud/design-system": "workspace:*",
-        "@agents-in-the-cloud/observable-terminal": "workspace:*",
-        "@agents-in-the-cloud/shared": "workspace:*",
-        "@agents-in-the-cloud/workspace": "workspace:*",
-        "@agents-in-the-cloud/workspace-templates": "workspace:*",
-        "typebox": "^1.0.57",
       },
     },
     "packages/update": {
@@ -478,8 +488,8 @@
     },
   },
   "patchedDependencies": {
-    "@earendil-works/pi-durable@1.1.0": "patches/@earendil-works%2Fpi-durable@1.1.0.patch",
     "@gespenst/core@0.1.1": "patches/@gespenst%2Fcore@0.1.1.patch",
+    "@earendil-works/pi-durable@1.1.0": "patches/@earendil-works%2Fpi-durable@1.1.0.patch",
   },
   "catalog": {
     "@earendil-works/chord": "1.1.0",
@@ -503,21 +513,25 @@
 
     "@agents-in-the-cloud/cli-agent": ["@agents-in-the-cloud/cli-agent@workspace:packages/cli-agent"],
 
-    "@agents-in-the-cloud/codex-cli-agent": ["@agents-in-the-cloud/codex-cli-agent@workspace:packages/codex-cli-agent"],
     "@agents-in-the-cloud/codex-agent": ["@agents-in-the-cloud/codex-agent@workspace:packages/codex-agent"],
 
+    "@agents-in-the-cloud/codex-cli-agent": ["@agents-in-the-cloud/codex-cli-agent@workspace:packages/codex-cli-agent"],
+
     "@agents-in-the-cloud/core": ["@agents-in-the-cloud/core@workspace:packages/core"],
+
+    "@agents-in-the-cloud/cursor-agent": ["@agents-in-the-cloud/cursor-agent@workspace:packages/cursor-agent"],
 
     "@agents-in-the-cloud/design-system": ["@agents-in-the-cloud/design-system@workspace:packages/design-system"],
 
     "@agents-in-the-cloud/desktop": ["@agents-in-the-cloud/desktop@workspace:packages/desktop"],
+
+    "@agents-in-the-cloud/dictation": ["@agents-in-the-cloud/dictation@workspace:packages/dictation"],
 
     "@agents-in-the-cloud/files": ["@agents-in-the-cloud/files@workspace:packages/files"],
 
     "@agents-in-the-cloud/host": ["@agents-in-the-cloud/host@workspace:packages/host"],
 
     "@agents-in-the-cloud/inline-content": ["@agents-in-the-cloud/inline-content@workspace:packages/inline-content"],
-
 
     "@agents-in-the-cloud/legacy-converter": ["@agents-in-the-cloud/legacy-converter@workspace:packages/legacy-converter"],
 
@@ -540,8 +554,6 @@
     "@agents-in-the-cloud/subagents": ["@agents-in-the-cloud/subagents@workspace:packages/subagents"],
 
     "@agents-in-the-cloud/syntax": ["@agents-in-the-cloud/syntax@workspace:packages/syntax"],
-
-    "@agents-in-the-cloud/dictation": ["@agents-in-the-cloud/dictation@workspace:packages/dictation"],
 
     "@agents-in-the-cloud/update": ["@agents-in-the-cloud/update@workspace:packages/update"],
 
@@ -1298,14 +1310,6 @@
     "zod-to-json-schema": ["zod-to-json-schema@3.25.2", "", { "peerDependencies": { "zod": "^3.25.28 || ^4" } }, "sha512-O/PgfnpT1xKSDeQYSCfRI5Gy3hPf91mKVDuYLUHZJMiDFptvP41MSnWofm8dnCm0256ZNfZIM7DSzuSMAFnjHA=="],
 
     "zwitch": ["zwitch@2.0.4", "", {}, "sha512-bXE4cR/kVZhKZX/RjPEflHaKVhUVl85noU3v6b8apfQEc1x4A+zBxjZ4lN8LqGd6WZ3dl98pY4o717VFmoPp+A=="],
-
-    "@agents-in-the-cloud/desktop/@hotwired/stimulus": ["@hotwired/stimulus@github:hotwired/dev-builds#339df54", {}, "hotwired-dev-builds-339df54", "sha512-mHNF9l1AaFMwHph9F+E6H9/MOtt8gIPSyNKMJELZOfYlh9rdmfmgXu6+EmC1NfjcA0tc6u+xn8PDoOjSzc9SGw=="],
-
-    "@agents-in-the-cloud/host/@hotwired/stimulus": ["@hotwired/stimulus@github:hotwired/dev-builds#339df54", {}, "hotwired-dev-builds-339df54", "sha512-mHNF9l1AaFMwHph9F+E6H9/MOtt8gIPSyNKMJELZOfYlh9rdmfmgXu6+EmC1NfjcA0tc6u+xn8PDoOjSzc9SGw=="],
-
-    "@agents-in-the-cloud/inline-content/@hotwired/stimulus": ["@hotwired/stimulus@github:hotwired/dev-builds#339df54", {}, "hotwired-dev-builds-339df54", "sha512-mHNF9l1AaFMwHph9F+E6H9/MOtt8gIPSyNKMJELZOfYlh9rdmfmgXu6+EmC1NfjcA0tc6u+xn8PDoOjSzc9SGw=="],
-
-    "@agents-in-the-cloud/web/@hotwired/stimulus": ["@hotwired/stimulus@github:hotwired/dev-builds#339df54", {}, "hotwired-dev-builds-339df54", "sha512-mHNF9l1AaFMwHph9F+E6H9/MOtt8gIPSyNKMJELZOfYlh9rdmfmgXu6+EmC1NfjcA0tc6u+xn8PDoOjSzc9SGw=="],
 
     "@aws-sdk/credential-provider-sso/@aws-sdk/token-providers": ["@aws-sdk/token-providers@3.1138.0", "", { "dependencies": { "@aws-sdk/core": "^3.978.1", "@aws-sdk/nested-clients": "^3.997.46", "@aws-sdk/types": "^3.974.6", "@smithy/core": "^3.35.0", "@smithy/types": "^4.19.0", "tslib": "^2.6.2" } }, "sha512-GpyAr0DD63YOEmYFM6Df+gJuIgC92MMTiBK4FTKfxii5MJ9ge20epR7LyroulscYlG89J+ZB2ivFDPjvfQhzdw=="],
 

@@ -1,0 +1,14 @@
+{
+  "name": "@agents-in-the-cloud/cursor-agent",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./server": "./src/server/index.ts"
+  },
+  "dependencies": {
+    "@agents-in-the-cloud/cli-agent": "workspace:*",
+    "@agents-in-the-cloud/core": "workspace:*",
+    "@agents-in-the-cloud/shared": "workspace:*",
+    "@agents-in-the-cloud/workspace": "workspace:*"
+  }
+}

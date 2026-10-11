@@ -22,13 +22,13 @@ test("builtin is the initial default and successful choices persist", async () =
   expect((await defaultAgentType()).id).toBe("builtin");
   await rememberAgentType("codex");
   expect(JSON.parse(await Bun.file(join(directory, "default-agent-type.json")).text())).toBe("codex");
-  expect((await orderedAgentTypes()).map(({ id }) => id)).toEqual(["codex", "builtin", "claude", "codex-cli", "pi"]);
+  expect((await orderedAgentTypes()).map(({ id }) => id)).toEqual(["codex", "builtin", "claude", "codex-cli", "cursor", "pi"]);
   await rememberAgentType("claude");
   expect((await defaultAgentType()).id).toBe("claude");
-  expect((await orderedAgentTypes()).map(({ id }) => id)).toEqual(["claude", "builtin", "codex", "codex-cli", "pi"]);
+  expect((await orderedAgentTypes()).map(({ id }) => id)).toEqual(["claude", "builtin", "codex", "codex-cli", "cursor", "pi"]);
   await rememberAgentType("pi");
   expect((await defaultAgentType()).id).toBe("pi");
-  expect((await orderedAgentTypes()).map(({ id }) => id)).toEqual(["pi", "builtin", "claude", "codex", "codex-cli"]);
+  expect((await orderedAgentTypes()).map(({ id }) => id)).toEqual(["pi", "builtin", "claude", "codex", "codex-cli", "cursor"]);
   await rememberAgentType("codex-cli");
   expect((await defaultAgentType()).id).toBe("codex-cli");
   await rememberAgentType("builtin");
@@ -94,6 +94,20 @@ test("previous Agent type preference remains readable and new choices use the re
   expect((await defaultAgentType()).id).toBe("codex");
 });
 
+
+test("Cursor resolves to the CLI adapter without a host model", async () => {
+  const { agentsInTheCloudServerModule: cursor } = await import("@agents-in-the-cloud/cursor-agent/server");
+  expect(getAgentType("cursor")).toBe(cursor.agentType!);
+  expect(cursor.id).toBe("cursor-agent");
+  expect(cursor.agentType?.label).toBe("Cursor");
+  const form = new FormData();
+  form.set("model", "cursor::composer");
+  form.set("thinkingLevel", "high");
+  const submitted = await cursor.agentType!.launch.submit(form);
+  if (!("prepare" in submitted)) throw new Error("Cursor launch did not return settings");
+  expect(await submitted.prepare()).toEqual({ agent: {} });
+  expect(await cursor.agentType!.launch.renderFooter({ frameId: "frame", formId: "form", url: "/launch", query: new URLSearchParams() })).toBe("");
+});
 
 test("Codex and Codex CLI resolve to distinct implementations without old aliases", async () => {
   const { agentsInTheCloudServerModule: codex } = await import("@agents-in-the-cloud/codex-agent/server");
