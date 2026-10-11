@@ -171,6 +171,25 @@ describe("forge accounts", () => {
     expect(discoverForgeAccount("bitbucket")).toEqual({ forge: "bitbucket", email, token: "env-token" });
   });
 
+  test("a corrupt Bitbucket account file leaves GitHub discovery working", () => {
+    setForgeAccount({ forge: "github", token: "gh-token" });
+    const path = join(dataDir, "workspace", "bitbucket-account");
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, "{");
+
+    expect(discoverForgeAccount("github")).toEqual({ forge: "github", token: "gh-token" });
+    expect(discoverForgeAccounts().map((account) => account.forge)).toEqual(["github"]);
+    expect(discoverForgeAccount("bitbucket")).toBeUndefined();
+  });
+
+  test("Bitbucket does not take an account from BKT_TOKEN and BKT_USERNAME", () => {
+    process.env.BKT_TOKEN = "env-token";
+    process.env.BKT_USERNAME = "ada@example.com";
+
+    expect(discoverForgeAccount("bitbucket")).toBeUndefined();
+    expect(hasForgeAccount("bitbucket")).toBe(false);
+  });
+
   test("malformed Bitbucket JSON throws", () => {
     const path = join(dataDir, "workspace", "bitbucket-account");
     mkdirSync(dirname(path), { recursive: true });

@@ -214,6 +214,64 @@ test("a Bitbucket rate limit keeps GitHub hits and does not rate-limit the whole
   expect(results.groups.some((group) => group.notice?.includes("Connect Bitbucket"))).toBe(false);
 });
 
+test("a Bitbucket network failure keeps the GitHub results", async () => {
+  connectBitbucket();
+  globalThis.fetch = Object.assign(async (input: Parameters<typeof fetch>[0]) => {
+    const url = new URL(String(input));
+    if (url.hostname === "api.bitbucket.org") throw new TypeError("network down");
+    if (url.pathname === "/user") return Response.json({ login: "me" });
+    if (url.pathname === "/user/orgs") return Response.json([]);
+    return Response.json({ items: [repository("public/survives")] });
+  }, { preconnect: originalFetch.preconnect });
+
+  const results = await searchRepositories("survives-net");
+  expect(repositoriesIn(results).map((repo) => repo.fullName)).toContain("public/survives");
+  expect(notice(results, "Your Bitbucket repositories")).toContain("could not be searched");
+});
+
+test("a Bitbucket response that does not match the schema keeps the GitHub results", async () => {
+  connectBitbucket();
+  globalThis.fetch = Object.assign(async (input: Parameters<typeof fetch>[0]) => {
+    const url = new URL(String(input));
+    if (url.hostname === "api.bitbucket.org") return Response.json({ values: [{ full_name: 1 }] });
+    if (url.pathname === "/user") return Response.json({ login: "me" });
+    if (url.pathname === "/user/orgs") return Response.json([]);
+    return Response.json({ items: [repository("public/survives-schema")] });
+  }, { preconnect: originalFetch.preconnect });
+
+  const results = await searchRepositories("survives-schema");
+  expect(repositoriesIn(results).map((repo) => repo.fullName)).toContain("public/survives-schema");
+  expect(notice(results, "Your Bitbucket repositories")).toContain("could not be searched");
+});
+
+test("anonymous GitHub rate limits stay a retry delay", async () => {
+  delete process.env.GH_TOKEN;
+  globalThis.fetch = Object.assign(async () => new Response("rate limited", { status: 429, headers: { "retry-after": "30" } }), { preconnect: originalFetch.preconnect });
+
+  const results = await searchRepositories("anon-limited");
+  expect(repositorySearchIsRateLimited(results)?.retryAfterSeconds).toBe(30);
+});
+
+test("a Bitbucket service error is not cached", async () => {
+  connectBitbucket();
+  let bitbucketCalls = 0;
+  globalThis.fetch = Object.assign(async (input: Parameters<typeof fetch>[0]) => {
+    const url = new URL(String(input));
+    if (url.hostname === "api.bitbucket.org") {
+      bitbucketCalls += 1;
+      if (bitbucketCalls === 1) return new Response("bad gateway", { status: 502 });
+      return Response.json({ values: [] });
+    }
+    if (url.pathname === "/user") return Response.json({ login: "me" });
+    if (url.pathname === "/user/orgs") return Response.json([]);
+    return Response.json({ items: [repository("public/again")] });
+  }, { preconnect: originalFetch.preconnect });
+
+  await searchRepositories("retry-bb");
+  await searchRepositories("retry-bb");
+  expect(bitbucketCalls).toBe(2);
+});
+
 test("omits Bitbucket when no account is stored", async () => {
   stubSearch(() => [repository("public/widget")]);
   const results = await searchRepositories("no-bitbucket");

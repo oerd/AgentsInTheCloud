@@ -1,6 +1,12 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import { parseAtlassianAccountEmail } from "@agents-in-the-cloud/core";
 import { validateForgeAccount } from "../src/server/forge-auth.ts";
+import { renderForgeSection } from "../src/server/settings/git-host.ts";
+import { createWorkspaceTemplateRoutes } from "../src/server/workspace-template-routes.ts";
 
 const originalFetch = globalThis.fetch;
 
@@ -128,6 +134,24 @@ describe("forge auth", () => {
     expect(local.commitEmail).toBe("ada@example.com");
   });
 
+  test("accepts a Bitbucket token that can read repositories when the user profile is forbidden", async () => {
+    const urls: string[] = [];
+    globalThis.fetch = fetchStub((url) => {
+      urls.push(String(url));
+      if (String(url).startsWith("https://api.bitbucket.org/2.0/repositories")) return Promise.resolve(Response.json({ values: [] }));
+      if (url === "https://api.bitbucket.org/2.0/user") return Promise.resolve(new Response("forbidden", { status: 403 }));
+      throw new Error(`unexpected fetch ${String(url)}`);
+    });
+
+    const result = await validateForgeAccount({ forge: "bitbucket", email: "ada@example.com", token: "repo-token" });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.commitName).toBe("ada");
+    expect(result.commitEmail).toBe("ada@example.com");
+    expect(urls[0]).toContain("/2.0/repositories");
+    expect(urls[0]).toContain("role=member");
+  });
+
   test("reports rejected Bitbucket credentials", async () => {
     globalThis.fetch = fetchStub(() => Promise.resolve(new Response("bad", { status: 401 })));
 
@@ -144,6 +168,51 @@ describe("forge auth", () => {
       ok: false,
       message: "Bitbucket returned an invalid user response. Try again.",
     });
+  });
+
+  test("an unreadable Bitbucket account file still offers Disconnect", async () => {
+    const previous = process.env.ATELIER_DATA_DIR;
+    const dataDir = await mkdtemp(join(tmpdir(), "agents-in-the-cloud-bitbucket-file-"));
+    process.env.ATELIER_DATA_DIR = dataDir;
+    try {
+      const path = join(dataDir, "workspace", "bitbucket-account");
+      mkdirSync(dirname(path), { recursive: true });
+      writeFileSync(path, "{");
+      const html = await renderForgeSection("bitbucket");
+      expect(html).toContain("Disconnect");
+      expect(html).toContain("can&#39;t be read");
+      expect(html).not.toContain("bkt auth login");
+    } finally {
+      if (previous === undefined) delete process.env.ATELIER_DATA_DIR;
+      else process.env.ATELIER_DATA_DIR = previous;
+      await rm(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  test("the Bitbucket connect form says where the token comes from", async () => {
+    const html = await renderForgeSection("bitbucket");
+    expect(html).toContain("https://id.atlassian.com/manage-profile/security/api-tokens");
+    expect(html).toContain("repository");
+    expect(html).not.toContain("bkt auth login");
+  });
+
+  test("Add a template mentions Bitbucket search only as something you connect", async () => {
+    const previous = process.env.ATELIER_DATA_DIR;
+    const dataDir = await mkdtemp(join(tmpdir(), "agents-in-the-cloud-template-copy-"));
+    process.env.ATELIER_DATA_DIR = dataDir;
+    try {
+      const html = await createWorkspaceTemplateRoutes({
+        referencingWorkspaces: () => [],
+        invalidatePresentation: () => {},
+        createAgentWorkspace: () => Promise.resolve(new Response()),
+      }).editorHtml({ kind: "new" });
+      expect(html).toContain("Connect Bitbucket in Settings to search it too.");
+      expect(html).not.toContain("search GitHub and Bitbucket");
+    } finally {
+      if (previous === undefined) delete process.env.ATELIER_DATA_DIR;
+      else process.env.ATELIER_DATA_DIR = previous;
+      await rm(dataDir, { recursive: true, force: true });
+    }
   });
 
   test("reports a Bitbucket network failure", async () => {
