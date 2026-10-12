@@ -84,6 +84,14 @@ test("runtime detection only enables System's app container", async () => {
     else expect(runtime).toBeUndefined();
   }
 });
+test("apps started by older System supervisors retain upstream self-updates", async () => {
+  const repository = "ghcr.io/lucasmeijer/agents-in-the-cloud";
+  const digest = `sha256:${"e".repeat(64)}`;
+  const runtime = await detectSelfUpdateRuntime(async (args) => ({ code: 0, stderr: "", stdout: JSON.stringify(args[0] === "inspect"
+    ? [{ Image: "sha256:app", Config: { Labels: { "agents-in-the-cloud.role": "app" } } }]
+    : [{ Id: "sha256:app", RepoDigests: [`${repository}@${digest}`], Config: { Labels: { "org.opencontainers.image.revision": "revision" } } }]) }), async () => "container");
+  expect(runtime).toEqual({ repository, currentRevision: "revision", currentDigest: digest });
+});
 test("Docker pull stream handles progress, exact references and embedded errors without uncaught exceptions", async () => {
   const directory = await mkdtemp(join(tmpdir(), "agents-in-the-cloud-pull-"));
   const socket = join(directory, "docker.sock");

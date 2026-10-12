@@ -1,5 +1,5 @@
 import { resolveImage, type PlannedImage } from "./registry.ts";
-import { appRepositoryLabel, ghcrRepository } from "@agents-in-the-cloud/core/ghcr";
+import { appRepositoryFromImage, appRepositoryLabel } from "@agents-in-the-cloud/core/ghcr";
 import { readFile } from "node:fs/promises";
 import { request } from "node:http";
 import { hostname } from "node:os";
@@ -62,8 +62,8 @@ export async function detectSelfUpdateRuntime(exec: DockerExec = dockerExec, con
   if (result.code !== 0) return undefined;
   const container = Value.Parse(Type.Array(Type.Object({ Image: Type.String(), Config: Type.Object({ Labels: Type.Optional(Type.Union([labelsSchema, Type.Null()])) }) })), JSON.parse(result.stdout))[0];
   if (container?.Config.Labels?.["agents-in-the-cloud.role"] !== "app") return undefined;
-  const repository = ghcrRepository(container.Config.Labels[appRepositoryLabel] ?? "");
-  if (!repository) return undefined;
+  // Older System supervisors do not label the app repository and always update from upstream.
+  const repository = appRepositoryFromImage(container.Config.Labels[appRepositoryLabel] ?? "");
   const image = await dockerImageInspect(container.Image, exec);
   return { repository, currentRevision: image.Config?.Labels?.["org.opencontainers.image.revision"], currentDigest: image.RepoDigests?.find((ref) => ref.startsWith(`${repository}@`))?.split("@")[1] ?? image.Id };
 }
