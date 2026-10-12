@@ -1,28 +1,9 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-resolve_ghcr_owner() {
-  local owner="${GHCR_OWNER:-}" url=""
-  if [ -z "$owner" ]; then owner="${GITHUB_REPOSITORY_OWNER:-}"; fi
-  if [ -z "$owner" ] && git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-    url="$(git remote get-url origin 2>/dev/null || true)"
-    if [[ "$url" =~ ^git@github\.com:([^/]+)/ ]]; then
-      owner="${BASH_REMATCH[1]}"
-    elif [[ "$url" =~ ^https://([^@]+@)?github\.com/([^/]+)/ ]]; then
-      owner="${BASH_REMATCH[2]}"
-    fi
-  fi
-  if [ -z "$owner" ]; then owner="lucasmeijer"; fi
-  owner="$(printf '%s' "$owner" | tr '[:upper:]' '[:lower:]')"
-  if ! [[ "$owner" =~ ^[a-z0-9]([a-z0-9]|-[a-z0-9]){0,38}$ ]]; then
-    printf 'GHCR owner must be a GitHub username.\n' >&2
-    exit 1
-  fi
-  printf '%s' "$owner"
-}
-ghcr_owner="$(resolve_ghcr_owner)"
-system_image="ghcr.io/${ghcr_owner}/agents-in-the-cloud-system:latest"
-app_image="ghcr.io/${ghcr_owner}/agents-in-the-cloud:latest"
+system_image=ghcr.io/lucasmeijer/agents-in-the-cloud-system:latest
+app_image=ghcr.io/lucasmeijer/agents-in-the-cloud:latest
+system_image_explicit=0
 action=""
 uninstall_requested=0
 access_mode=""
@@ -148,8 +129,7 @@ Update also installs the newest AgentsInTheCloud app on the installation's selec
   --uninstall         Permanently delete installation data (also supports Atelier System)
   -h, --help          Show help
 
-The default owner is GHCR_OWNER, then GITHUB_REPOSITORY_OWNER, then the GitHub owner of this checkout, then lucasmeijer.
-Set GHCR_OWNER when the GHCR namespace is not that GitHub owner. A repository variable of the same name overrides it in GitHub Actions.
+Fork installations should pass both --system-image and --app-image explicitly.
 The app image is only used when System has no persisted app selection.
 There is no migration from the previous AgentsInTheCloud installation layout.
 HELP
@@ -160,7 +140,7 @@ while [ "$#" -gt 0 ]; do
     --system-image|--app-image|--action|--access-mode)
       [ "$#" -ge 2 ] && [ -n "$2" ] || fail "$1 requires a value"
       case "$1" in
-        --system-image) system_image="$2" ;;
+        --system-image) system_image="$2"; system_image_explicit=1 ;;
         --app-image) app_image="$2" ;;
         --action) action="$2" ;;
         --access-mode) access_mode="$2" ;;
@@ -257,7 +237,13 @@ if [ "$action" != uninstall ] && [ "$host_os" = Linux ] && [ "$desktop" -eq 0 ];
 fi
 
 installed=0
-if docker container inspect "$system_name" >/dev/null 2>&1; then installed=1; fi
+if docker container inspect "$system_name" >/dev/null 2>&1; then
+  installed=1
+  if [ "$action" != uninstall ] && [ "$system_image_explicit" -eq 0 ]; then
+    system_image="$(docker inspect --format '{{.Config.Image}}' "$system_name")"
+    [ -n "$system_image" ] || fail "Docker returned no image for the existing AgentsInTheCloud System"
+  fi
+fi
 # Keep the legacy cleanup implementation frozen: it knows Atelier's names,
 # socket, storage, inventory contract, and DELETE ATELIER confirmation.
 if [ "$action" = uninstall ]; then

@@ -2,10 +2,14 @@ import { afterEach, beforeEach, expect, mock, test } from "bun:test";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { prepareChannelUpdate } from "./channel-update.ts";
+import { prepareChannelUpdate as prepareWithRepository } from "./channel-update.ts";
 
 let directory: string;
 let settingsPath: string;
+
+function prepareChannelUpdate(path: string, images: Parameters<typeof prepareWithRepository>[2], repository = "ghcr.io/lucasmeijer/agents-in-the-cloud") {
+  return prepareWithRepository(path, repository, images);
+}
 
 beforeEach(async () => {
   directory = await mkdtemp(join(tmpdir(), "agents-in-the-cloud-channel-update-"));

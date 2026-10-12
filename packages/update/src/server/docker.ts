@@ -1,4 +1,5 @@
-import { registryRepository, resolveImage, type PlannedImage } from "./registry.ts";
+import { resolveImage, type PlannedImage } from "./registry.ts";
+import { appRepositoryLabel, ghcrRepository } from "@agents-in-the-cloud/core/ghcr";
 import { readFile } from "node:fs/promises";
 import { request } from "node:http";
 import { hostname } from "node:os";
@@ -52,7 +53,7 @@ export async function dockerImageInspect(reference: string, exec: DockerExec = d
   if (!image) throw new Error(`Docker returned no image: ${reference}`);
   return image;
 }
-export interface SelfUpdateRuntime { currentRevision?: string; currentDigest: string; }
+export interface SelfUpdateRuntime { repository: string; currentRevision?: string; currentDigest: string; }
 /** Only System's managed app can ask its supervisor to replace it. */
 export async function detectSelfUpdateRuntime(exec: DockerExec = dockerExec, containerId = ownContainerId): Promise<SelfUpdateRuntime | undefined> {
   const id = await containerId();
@@ -61,9 +62,10 @@ export async function detectSelfUpdateRuntime(exec: DockerExec = dockerExec, con
   if (result.code !== 0) return undefined;
   const container = Value.Parse(Type.Array(Type.Object({ Image: Type.String(), Config: Type.Object({ Labels: Type.Optional(Type.Union([labelsSchema, Type.Null()])) }) })), JSON.parse(result.stdout))[0];
   if (container?.Config.Labels?.["agents-in-the-cloud.role"] !== "app") return undefined;
+  const repository = ghcrRepository(container.Config.Labels[appRepositoryLabel] ?? "");
+  if (!repository) return undefined;
   const image = await dockerImageInspect(container.Image, exec);
-  const prefix = `ghcr.io/${registryRepository()}@`;
-  return { currentRevision: image.Config?.Labels?.["org.opencontainers.image.revision"], currentDigest: image.RepoDigests?.find((ref) => ref.startsWith(prefix))?.split("@")[1] ?? image.Id };
+  return { repository, currentRevision: image.Config?.Labels?.["org.opencontainers.image.revision"], currentDigest: image.RepoDigests?.find((ref) => ref.startsWith(`${repository}@`))?.split("@")[1] ?? image.Id };
 }
 /** Docker preserves images referenced by any container, including stopped containers. */
 export async function pruneUnusedAgentsInTheCloudImages(exec: DockerExec = dockerExec): Promise<void> {

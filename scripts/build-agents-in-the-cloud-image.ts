@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 
 import { workloadCgroupArgs } from "@agents-in-the-cloud/core";
-import { ghcrRepository, imageRepository, ownerFromRepository, registryOwnerFrom } from "../packages/core/src/ghcr.ts";
+import { ownerFromRepository, upstreamImageRepository } from "../packages/core/src/ghcr.ts";
 import { rmSync } from "node:fs";
 import { arch } from "node:os";
 import { imageHasPlatforms } from "../packages/workspace-image/src/local-images.ts";
@@ -14,8 +14,7 @@ Usage:
   bun run scripts/build-agents-in-the-cloud-image.ts [options]
 
 Options:
-  --image <name>        Image repository/name (default: ghcr.io/<owner>/agents-in-the-cloud)
-                        Owner is GHCR_OWNER, then GITHUB_REPOSITORY_OWNER, then the GitHub owner of origin, then lucasmeijer.
+  --image <name>        Image repository/name (default: ghcr.io/lucasmeijer/agents-in-the-cloud)
   --tag <tag>           Tag to apply. May be passed more than once (default: git describe/short sha)
   --latest             Tag the image as <image>:latest (default)
   --no-latest          Do not update latest (release staging)
@@ -65,14 +64,9 @@ function takeValue(args: string[], index: number, flag: string): string {
   return value;
 }
 
-function defaultAppImage(): string {
-  const origin = maybeRun(["git", "remote", "get-url", "origin"]);
-  return imageRepository(registryOwnerFrom(process.env, origin), "app");
-}
-
 function parseArgs(args: string[]): Options {
   const options: Options = {
-    image: defaultAppImage(),
+    image: upstreamImageRepository("app"),
     tags: [],
     latest: true,
     stable: false,
@@ -121,7 +115,7 @@ function parseArgs(args: string[]): Options {
     } else if (arg === "--build-arg") {
       const value = takeValue(args, i, arg);
       const buildArgName = value.split("=")[0]!;
-      if (["ATELIER_DEFAULT_WORKSPACE_IMAGE", "ATELIER_EAGERLY_PRELOAD", "GHCR_OWNER"].includes(buildArgName)) {
+      if (["ATELIER_DEFAULT_WORKSPACE_IMAGE", "ATELIER_EAGERLY_PRELOAD"].includes(buildArgName)) {
         fail(`The image build owns ${buildArgName}`);
       }
       options.buildArgs.push(value);
@@ -306,8 +300,6 @@ const defaultBuildArgs = [
   `ATELIER_DEFAULT_WORKSPACE_IMAGE=${publishedWorkspaceRef}`,
   `ATELIER_EAGERLY_PRELOAD=${JSON.stringify([publishedWorkspaceRef])}`,
 ];
-const appRepository = ghcrRepository(options.image);
-if (appRepository) defaultBuildArgs.push(`GHCR_OWNER=${ownerFromRepository(appRepository)}`);
 const allBuildArgs = [...defaultBuildArgs, ...options.buildArgs];
 
 await buildImage(imageRefs, [

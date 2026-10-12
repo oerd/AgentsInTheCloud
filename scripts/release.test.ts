@@ -7,6 +7,7 @@ import { parseReleaseArgs, promoteChannels, release, verifyRevision, type Releas
 
 const commit = "a".repeat(40);
 const digest = `sha256:${"b".repeat(64)}`;
+const appRepository = "ghcr.io/lucasmeijer/agents-in-the-cloud";
 const architectures = ["amd64", "arm64"];
 const manifest = {
   digest,
@@ -18,9 +19,10 @@ function status(stable = false): ReleaseStatus {
 }
 
 test("release only supports latest or both, plus non-publishing checks", () => {
-  expect(parseReleaseArgs([])).toEqual({ stable: false, check: false, help: false });
-  expect(parseReleaseArgs(["--stable", "--check"])).toEqual({ stable: true, check: true, help: false });
+  expect(parseReleaseArgs([])).toEqual({ stable: false, check: false, help: false, image: appRepository });
+  expect(parseReleaseArgs(["--stable", "--check", "--image", "ghcr.io/oerd/team/app"])).toEqual({ stable: true, check: true, help: false, image: "ghcr.io/oerd/team/app" });
   expect(() => parseReleaseArgs(["--channel", "stable"])).toThrow("Unknown release option");
+  expect(() => parseReleaseArgs(["--image"])).toThrow("requires a repository");
 });
 
 test("registry absence is distinct from authentication or network failure", async () => {
@@ -37,8 +39,8 @@ test("verification requires both architectures and matching revision labels", as
     const index = manifest.manifests.findIndex((entry) => args.some((arg) => arg.endsWith(entry.digest)));
     return ok(JSON.stringify({ os: "linux", architecture: architectures[index], config: { Labels: { "org.opencontainers.image.revision": commit, "eagerly-preload": JSON.stringify([`ghcr.io/lucasmeijer/agents-in-the-cloud-workspace:signature@${digest}`]) } } }));
   };
-  expect(await verifyRevision(run, "ref", commit)).toBe(digest);
-  await expect(verifyRevision(run, "ref", "wrong-sha")).rejects.toThrow("does not match revision");
+  expect(await verifyRevision(run, "ref", commit, appRepository)).toBe(digest);
+  await expect(verifyRevision(run, "ref", "wrong-sha", appRepository)).rejects.toThrow("does not match revision");
 });
 
 test("promotion uses the verified digest and reports partial success", async () => {
@@ -49,7 +51,7 @@ test("promotion uses the verified digest and reports partial success", async () 
     calls.push(args);
     if (args.includes("create") && args.some((arg) => arg.endsWith(":stable"))) throw new Error("push failed");
     return ok(JSON.stringify(manifest));
-  }, current, () => saves.push(JSON.stringify(current.channels)))).rejects.toThrow("push failed");
+  }, current, () => saves.push(JSON.stringify(current.channels)), appRepository)).rejects.toThrow("push failed");
   expect(current.channels).toEqual({ latest: "published", stable: "failed" });
   expect(calls.filter((args) => args.includes("create")).every((args) => args.at(-1) === `ghcr.io/lucasmeijer/agents-in-the-cloud@${digest}`)).toBe(true);
   expect(saves.length).toBe(4);
@@ -61,18 +63,18 @@ test("both channels are promoted in order on success", async () => {
   await promoteChannels(async (args) => {
     if (args.includes("create")) channels.push(args[args.indexOf("--tag") + 1]!);
     return ok(JSON.stringify(manifest));
-  }, current, () => {});
+  }, current, () => {}, appRepository);
   expect(channels).toEqual(["ghcr.io/lucasmeijer/agents-in-the-cloud:latest", "ghcr.io/lucasmeijer/agents-in-the-cloud:stable"]);
   expect(current.channels).toEqual({ latest: "published", stable: "published" });
 });
 
 test("promotion fails if registry readback differs", async () => {
   const current = status();
-  await expect(promoteChannels(async () => ok(JSON.stringify({ ...manifest, digest: `sha256:${"c".repeat(64)}` })), current, () => {})).rejects.toThrow("digest differs");
+  await expect(promoteChannels(async () => ok(JSON.stringify({ ...manifest, digest: `sha256:${"c".repeat(64)}` })), current, () => {}, appRepository)).rejects.toThrow("digest differs");
   expect(current.channels.latest).toBe("failed");
 });
 
-async function scenario(options: { check?: boolean; exists?: boolean; moved?: boolean; buildFailure?: boolean; sameArch?: boolean; localArm?: boolean; badDriver?: boolean; missingHelper?: boolean; owner?: string }) {
+async function scenario(options: { check?: boolean; exists?: boolean; moved?: boolean; buildFailure?: boolean; sameArch?: boolean; localArm?: boolean; badDriver?: boolean; missingHelper?: boolean; image?: string }) {
   const directory = mkdtempSync(join(tmpdir(), "agents-in-the-cloud-release-test-"));
   const calls: { args: string[]; cwd?: string }[] = [];
   let uploaded = options.exists ?? false;
@@ -84,9 +86,6 @@ async function scenario(options: { check?: boolean; exists?: boolean; moved?: bo
   else process.env.ATELIER_RELEASE_HELPER = "builder@helper";
   const oldToken = process.env.GH_PACKAGE_TOKEN;
   process.env.GH_PACKAGE_TOKEN = "test-not-a-real-credential";
-  const oldOwner = process.env.GHCR_OWNER;
-  if (options.owner === undefined) delete process.env.GHCR_OWNER;
-  else process.env.GHCR_OWNER = options.owner;
   try {
     const run: Run = async (args, command) => {
       calls.push({ args, cwd: command?.cwd });
@@ -114,7 +113,7 @@ async function scenario(options: { check?: boolean; exists?: boolean; moved?: bo
       return ok();
     };
     let error: unknown;
-    try { await release({ check: current.check, stable: false, help: false }, run, current, () => {}, directory); }
+    try { await release({ check: current.check, stable: false, help: false, image: options.image ?? appRepository }, run, current, () => {}, directory); }
     catch (caught) { error = caught; }
     return { calls, current, error };
   } finally {
@@ -122,8 +121,6 @@ async function scenario(options: { check?: boolean; exists?: boolean; moved?: bo
     else process.env.ATELIER_RELEASE_HELPER = oldHelper;
     if (oldToken === undefined) delete process.env.GH_PACKAGE_TOKEN;
     else process.env.GH_PACKAGE_TOKEN = oldToken;
-    if (oldOwner === undefined) delete process.env.GHCR_OWNER;
-    else process.env.GHCR_OWNER = oldOwner;
     rmSync(directory, { recursive: true, force: true });
   }
 }
@@ -164,16 +161,17 @@ test("new commit is built in an isolated checkout with no latest tag before veri
   expect(calls.findIndex(({ args }) => args.includes("{{json .Image}}"))).toBeLessThan(calls.findIndex(({ args }) => args.includes("--tag") && args.includes("ghcr.io/lucasmeijer/agents-in-the-cloud:latest")));
 });
 
-test("GHCR_OWNER publishes that owner's app image and logs in as that user", async () => {
-  const { calls, error } = await scenario({ owner: "oerd" });
+test("an explicit nested repository selects the app publishing target and login owner", async () => {
+  const image = "ghcr.io/oerd/team/agents-in-the-cloud-dev";
+  const { calls, error } = await scenario({ image });
   expect(error).toBeUndefined();
   const login = calls.find(({ args }) => args.includes("login"));
   expect(login?.args).toContain("--username");
   expect(login?.args).toContain("oerd");
   const build = calls.find(({ args }) => args[0] === "bun");
   expect(build?.args).toContain("--image");
-  expect(build?.args).toContain("ghcr.io/oerd/agents-in-the-cloud");
-  expect(calls.some(({ args }) => args.includes("ghcr.io/oerd/agents-in-the-cloud:latest"))).toBe(true);
+  expect(build?.args).toContain(image);
+  expect(calls.some(({ args }) => args.includes(`${image}:latest`))).toBe(true);
   expect(calls.some(({ args }) => args.includes("ghcr.io/lucasmeijer/agents-in-the-cloud:latest"))).toBe(false);
 });
 
@@ -260,7 +258,7 @@ test(`image build CLI pairs images from its working checkout, not its tooling ch
 for (const preload of [undefined, "[]", "null", "{}", "[42]", JSON.stringify(["workspace:tag"])]) {
   test(`release rejects missing or unpinned workspace: ${preload}`, async () => {
     const run: Run = async args => args.includes("{{json .Manifest}}") ? ok(JSON.stringify(manifest)) : ok(JSON.stringify({os:"linux", architecture:"amd64", config:{Labels:{"org.opencontainers.image.revision":commit, "eagerly-preload":preload}}}));
-    await expect(verifyRevision(run, "ref", commit)).rejects.toThrow("digest-pinned workspace");
+    await expect(verifyRevision(run, "ref", commit, appRepository)).rejects.toThrow("digest-pinned workspace");
   });
 }
 

@@ -45,10 +45,11 @@ function deferred<T = void>() {
 const oldDigest = `sha256:${"a".repeat(64)}`;
 const newDigest = `sha256:${"b".repeat(64)}`;
 const newerDigest = `sha256:${"c".repeat(64)}`;
-const exact = `ghcr.io/lucasmeijer/agents-in-the-cloud@${newDigest}`;
+const repository = "ghcr.io/oerd/team/agents-in-the-cloud-dev";
+const exact = `${repository}@${newDigest}`;
 function manager(extra: UpdateManagerDeps = {}) {
   return new UpdateManager({
-    detectRuntime: async () => ({ currentDigest: oldDigest }),
+    detectRuntime: async () => ({ repository, currentDigest: oldDigest }),
     fetchMetadata: async () => ({ digest: newDigest }),
     prepareUpdate: async (reference) => ({ reference, imageId: "sha256:prepared-image-id" }),
     setInterval: noInterval, ...extra,
@@ -161,7 +162,7 @@ test("channel changes persist, discard prior prepared images, and survive manage
 test("a superseded channel check cannot publish success or failure", async () => {
   for (const fail of [false, true]) {
     const pending = deferred<{ digest: string }>();
-    const instance = manager({ readChannel: async () => "stable", fetchMetadata: async (channel) => channel === "latest" ? pending.promise : { digest: newDigest } });
+    const instance = manager({ readChannel: async () => "stable", fetchMetadata: async (_repository, channel) => channel === "latest" ? pending.promise : { digest: newDigest } });
     await instance.initialize(context().ctx);
     const stale = instance.setUpdateChannel("latest");
     await Bun.sleep(0);
@@ -187,7 +188,7 @@ test("new installations discover latest updates and pin their immutable image", 
   const prepared: string[] = [];
   const instance = manager({
     readChannel: async () => undefined,
-    fetchMetadata: async (channel) => { channels.push(channel); return { digest: newDigest }; },
+    fetchMetadata: async (selectedRepository, channel) => { expect(selectedRepository).toBe(repository); channels.push(channel); return { digest: newDigest }; },
     prepareUpdate: async (reference) => { prepared.push(reference); return { reference, imageId: "sha256:latest-image" }; },
   });
   expect(instance.snapshot().updateChannel).toBe("latest");
@@ -203,7 +204,7 @@ test.each(["stable", "latest"] as const)("stored %s channel overrides the latest
   const channels: string[] = [];
   const instance = manager({
     readChannel: async () => channel,
-    fetchMetadata: async (selected) => { channels.push(selected); return { digest: newDigest }; },
+    fetchMetadata: async (_repository, selected) => { channels.push(selected); return { digest: newDigest }; },
   });
   await instance.initialize(context().ctx);
   expect(instance.snapshot().updateChannel).toBe(channel);
@@ -220,7 +221,7 @@ test("switching from stable to latest persists the channel and refreshes the tar
     const dependencies = {
       readChannel: readStoredUpdateChannel,
       writeChannel: writeStoredUpdateChannel,
-      fetchMetadata: async (channel: "stable" | "latest") => {
+      fetchMetadata: async (_repository: string, channel: "stable" | "latest") => {
         channels.push(channel);
         return { digest: channel === "latest" ? newerDigest : newDigest };
       },

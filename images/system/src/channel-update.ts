@@ -1,4 +1,3 @@
-import { imageRepository, resolveRegistryOwner } from "../../../packages/core/src/ghcr.ts";
 import { readFile } from "node:fs/promises";
 import { Type } from "typebox";
 import { Value } from "typebox/value";
@@ -10,10 +9,10 @@ const settingsSchema = Type.Object({
   releaseChannel: Type.Optional(Type.Union([Type.Literal("stable"), Type.Literal("latest")])),
 });
 
-export async function prepareChannelUpdate(settingsPath: string, images: {
+export async function prepareChannelUpdate(settingsPath: string, repository: string, images: {
   pull: (reference: string) => Promise<void>;
   inspect: (reference: string) => Promise<string>;
-}, repository = imageRepository(resolveRegistryOwner(), "app")): Promise<string> {
+}): Promise<string> {
   const text = await readFile(settingsPath, "utf8").catch((error) => {
     if (error instanceof Error && "code" in error && error.code === "ENOENT") return undefined;
     throw error;

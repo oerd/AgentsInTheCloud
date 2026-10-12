@@ -5,7 +5,8 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { detectSelfUpdateRuntime, prepareUpdate, pruneUnusedAgentsInTheCloudImages, pullImageReference, type DockerImage, type PullProgress, type PullLayerProgress } from "../../src/server/docker.ts";
 
-const app = `ghcr.io/lucasmeijer/agents-in-the-cloud@sha256:${"a".repeat(64)}`;
+const appRepository = "ghcr.io/oerd/team/agents-in-the-cloud-dev";
+const app = `${appRepository}@sha256:${"a".repeat(64)}`;
 const workspace = `ghcr.io/lucasmeijer/workspace@sha256:${"b".repeat(64)}`;
 const appImage: DockerImage = { Id: "sha256:app" };
 
@@ -77,9 +78,9 @@ test("verification failure never reports ready", async () => {
 test("runtime detection only enables System's app container", async () => {
   for (const managed of [false, true]) {
     const runtime = await detectSelfUpdateRuntime(async (args) => ({ code: 0, stderr: "", stdout: JSON.stringify(args[0] === "inspect"
-      ? [{ Image: "sha256:app", Config: { Labels: { "agents-in-the-cloud.role": managed ? "app" : "workspace" } } }]
+      ? [{ Image: "sha256:app", Config: { Labels: { "agents-in-the-cloud.role": managed ? "app" : "workspace", "agents-in-the-cloud.app-repository": appRepository } } }]
       : [{ Id: "sha256:app", RepoDigests: [app], Config: { Labels: { "org.opencontainers.image.revision": "revision" } } }]) }), async () => "container");
-    if (managed) expect(runtime).toEqual({ currentRevision: "revision", currentDigest: app.split("@")[1] });
+    if (managed) expect(runtime).toEqual({ repository: appRepository, currentRevision: "revision", currentDigest: app.split("@")[1] });
     else expect(runtime).toBeUndefined();
   }
 });

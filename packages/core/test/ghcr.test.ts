@@ -1,72 +1,55 @@
 import { expect, test } from "bun:test";
 import {
-  appPackagePath,
-  channelRepository,
+  appRepositoryFromImage,
   ghcrRepository,
   imageRepository,
   ownerFromRepository,
-  resolveRegistryOwner,
-  selectAppRepository,
+  parseRegistryOwner,
+  requireGhcrRepository,
+  upstreamImageRepository,
 } from "../src/ghcr.ts";
 
-const tokenRemote = "https://x-access-token:ghp_secret@github.com/oerd/AgentsInTheCloud.git";
-
-test("upstream owner is lucasmeijer when nothing names a fork", () => {
-  expect(String(resolveRegistryOwner())).toBe("lucasmeijer");
-  expect(imageRepository(resolveRegistryOwner(), "app")).toBe("ghcr.io/lucasmeijer/agents-in-the-cloud");
-  expect(appPackagePath(resolveRegistryOwner())).toBe("lucasmeijer/agents-in-the-cloud");
+test("upstream repositories are explicit defaults", () => {
+  expect(String(upstreamImageRepository("app"))).toBe("ghcr.io/lucasmeijer/agents-in-the-cloud");
+  expect(String(upstreamImageRepository("system"))).toBe("ghcr.io/lucasmeijer/agents-in-the-cloud-system");
 });
 
-test("explicit owner wins over Actions and the git remote", () => {
-  expect(String(resolveRegistryOwner({
-    ghcrOwner: "Explicit",
-    githubRepositoryOwner: "ActionsUser",
-    originUrl: "git@github.com:Oerd/AgentsInTheCloud.git",
-  }))).toBe("explicit");
+test("publishing owners use GitHub's username rules", () => {
+  expect(String(parseRegistryOwner("Oerd"))).toBe("oerd");
+  expect(() => parseRegistryOwner("not a user")).toThrow("GitHub username");
+  expect(() => parseRegistryOwner("-leading")).toThrow("GitHub username");
+  expect(() => parseRegistryOwner("double--hyphen")).toThrow("GitHub username");
+  expect(() => parseRegistryOwner("a".repeat(40))).toThrow("GitHub username");
 });
 
-test("Actions owner wins over the git remote", () => {
-  expect(String(resolveRegistryOwner({
-    githubRepositoryOwner: "ActionsUser",
-    originUrl: "git@github.com:Oerd/AgentsInTheCloud.git",
-  }))).toBe("actionsuser");
+test("image roles share an explicitly selected owner", () => {
+  const owner = parseRegistryOwner("oerd");
+  expect(String(imageRepository(owner, "app"))).toBe("ghcr.io/oerd/agents-in-the-cloud");
+  expect(String(imageRepository(owner, "system"))).toBe("ghcr.io/oerd/agents-in-the-cloud-system");
+  expect(String(imageRepository(owner, "workspace"))).toBe("ghcr.io/oerd/agents-in-the-cloud-workspace");
+  expect(String(imageRepository(owner, "docker"))).toBe("ghcr.io/oerd/agents-in-the-cloud-docker");
 });
 
-test("git remote owner is lowercased and drops credentials", () => {
-  expect(String(resolveRegistryOwner({ originUrl: "git@github.com:Oerd/AgentsInTheCloud.git" }))).toBe("oerd");
-  expect(String(resolveRegistryOwner({ originUrl: tokenRemote }))).toBe("oerd");
-  expect(JSON.stringify(resolveRegistryOwner({ originUrl: tokenRemote }))).not.toContain("ghp_secret");
-});
-
-test("a non-GitHub remote keeps the upstream owner", () => {
-  expect(String(resolveRegistryOwner({ originUrl: "https://gitlab.com/oerd/AgentsInTheCloud.git" }))).toBe("lucasmeijer");
-  expect(String(resolveRegistryOwner({ ghcrOwner: "  ", originUrl: "" }))).toBe("lucasmeijer");
-});
-
-test("owner rejects characters GitHub would reject", () => {
-  expect(() => resolveRegistryOwner({ ghcrOwner: "not a user" })).toThrow("GitHub username");
-  expect(() => resolveRegistryOwner({ ghcrOwner: "-leading" })).toThrow("GitHub username");
-  expect(() => resolveRegistryOwner({ ghcrOwner: "double--hyphen" })).toThrow("GitHub username");
-});
-
-test("image roles share one owner", () => {
-  const owner = resolveRegistryOwner({ ghcrOwner: "oerd" });
-  expect(imageRepository(owner, "system")).toBe("ghcr.io/oerd/agents-in-the-cloud-system");
-  expect(imageRepository(owner, "workspace")).toBe("ghcr.io/oerd/agents-in-the-cloud-workspace");
-  expect(imageRepository(owner, "docker")).toBe("ghcr.io/oerd/agents-in-the-cloud-docker");
-});
-
-test("a ghcr ref keeps its repository and drops the tag or digest", () => {
-  expect(ghcrRepository("ghcr.io/oerd/agents-in-the-cloud:latest")).toBe("ghcr.io/oerd/agents-in-the-cloud");
-  expect(ghcrRepository(`ghcr.io/oerd/agents-in-the-cloud@sha256:${"a".repeat(64)}`)).toBe("ghcr.io/oerd/agents-in-the-cloud");
+test("GHCR references retain their full repository and drop tags or digests", () => {
+  expect(String(ghcrRepository("ghcr.io/oerd/agents-in-the-cloud:latest"))).toBe("ghcr.io/oerd/agents-in-the-cloud");
+  expect(String(ghcrRepository(`ghcr.io/oerd/agents-in-the-cloud:latest@sha256:${"a".repeat(64)}`))).toBe("ghcr.io/oerd/agents-in-the-cloud");
+  expect(String(ghcrRepository("ghcr.io/myorg/team/agents-in-the-cloud:latest"))).toBe("ghcr.io/myorg/team/agents-in-the-cloud");
   expect(ghcrRepository("sha256:abc")).toBeUndefined();
-  expect(String(ownerFromRepository("ghcr.io/oerd/agents-in-the-cloud"))).toBe("oerd");
+  expect(() => requireGhcrRepository("registry.example/app")).toThrow("Not a GHCR repository");
 });
 
-test("the installed app image chooses the repository updates pull", () => {
-  expect(selectAppRepository({ appImage: "ghcr.io/oerd/agents-in-the-cloud:sha-abc", ghcrOwner: "lucasmeijer" })).toBe("ghcr.io/oerd/agents-in-the-cloud");
-  expect(selectAppRepository({ appImage: "local:dev", ghcrOwner: "oerd" })).toBe("ghcr.io/oerd/agents-in-the-cloud");
-  expect(channelRepository({ remembered: "ghcr.io/oerd/agents-in-the-cloud", ghcrOwner: "lucasmeijer" })).toBe("ghcr.io/oerd/agents-in-the-cloud");
-  expect(channelRepository({ remembered: "nope", ghcrOwner: "oerd" })).toBe("ghcr.io/oerd/agents-in-the-cloud");
-  expect(channelRepository()).toBe("ghcr.io/lucasmeijer/agents-in-the-cloud");
+test("runtime repository parsing does not impose publishing-owner rules", () => {
+  expect(String(ghcrRepository("ghcr.io/foo-/agents-in-the-cloud:latest"))).toBe("ghcr.io/foo-/agents-in-the-cloud");
+  expect(String(ghcrRepository("ghcr.io/my.org/agents-in-the-cloud:latest"))).toBe("ghcr.io/my.org/agents-in-the-cloud");
+});
+
+test("registry login reads the owner without rejecting nested repositories", () => {
+  expect(String(ownerFromRepository("ghcr.io/oerd/agents-in-the-cloud"))).toBe("oerd");
+  expect(String(ownerFromRepository("ghcr.io/myorg/team/agents-in-the-cloud"))).toBe("myorg");
+});
+
+test("an installed GHCR image chooses the complete update repository", () => {
+  expect(String(appRepositoryFromImage("ghcr.io/oerd/agents-in-the-cloud-dev:sha-abc"))).toBe("ghcr.io/oerd/agents-in-the-cloud-dev");
+  expect(String(appRepositoryFromImage("ghcr.io/myorg/team/agents-in-the-cloud:latest"))).toBe("ghcr.io/myorg/team/agents-in-the-cloud");
+  expect(String(appRepositoryFromImage("local:dev"))).toBe("ghcr.io/lucasmeijer/agents-in-the-cloud");
 });

@@ -1,11 +1,7 @@
-import { appPackagePath, resolveRegistryOwner } from "@agents-in-the-cloud/core/ghcr";
+import { requireGhcrRepository } from "@agents-in-the-cloud/core/ghcr";
 import { type UpdateChannel } from "./update-channel.ts";
 import { Type, type Static } from "typebox";
 import { Value } from "typebox/value";
-
-export function registryRepository(env = process.env): string {
-  return appPackagePath(resolveRegistryOwner({ ghcrOwner: env.GHCR_OWNER }));
-}
 
 export type HttpFetcher = (input: string | URL, init?: RequestInit) => Promise<Response>;
 
@@ -116,8 +112,9 @@ async function fetchRegistryImage(base: string, version: string, fetcher: HttpFe
   return { digest, layers: manifest.layers, labels: config.config?.Labels ?? {} };
 }
 
-export async function fetchChannelImageMetadata(channel: UpdateChannel, fetcher: HttpFetcher = fetch, platform = { os: "linux", architecture: currentArch() }): Promise<ImageMetadata> {
-  const image = await fetchRegistryImage(`https://ghcr.io/v2/${registryRepository()}`, channel, fetcher, platform);
+export async function fetchChannelImageMetadata(repository: string, channel: UpdateChannel, fetcher: HttpFetcher = fetch, platform = { os: "linux", architecture: currentArch() }): Promise<ImageMetadata> {
+  const path = requireGhcrRepository(repository).slice("ghcr.io/".length);
+  const image = await fetchRegistryImage(`https://ghcr.io/v2/${path}`, channel, fetcher, platform);
   return { digest: image.digest, revision: image.labels["org.opencontainers.image.revision"] };
 }
 

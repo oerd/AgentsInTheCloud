@@ -7,15 +7,12 @@ import { publishSystem } from "./publish.ts";
 
 const revision = "a".repeat(40);
 const digest = (arch: string) => `sha256:${(arch === "amd64" ? "1" : "2").repeat(64)}`;
-async function scenario(options: { local?: string; sameArch?: boolean; missingHelper?: boolean; check?: boolean; wrongRevision?: boolean; buildFails?: boolean; owner?: string } = {}) {
+async function scenario(options: { local?: string; sameArch?: boolean; missingHelper?: boolean; check?: boolean; wrongRevision?: boolean; buildFails?: boolean; image?: string } = {}) {
   const directory = mkdtempSync(join(tmpdir(), "system-publish-test-"));
   const helper = process.env.ATELIER_RELEASE_HELPER;
   const token = process.env.GH_PACKAGE_TOKEN;
-  const previousOwner = process.env.GHCR_OWNER;
   process.env.ATELIER_RELEASE_HELPER = options.missingHelper ? "" : "builder@test-helper";
   process.env.GH_PACKAGE_TOKEN = "test-package-token";
-  if (options.owner === undefined) delete process.env.GHCR_OWNER;
-  else process.env.GHCR_OWNER = options.owner;
   const calls: { args: string[]; input?: string }[] = [];
   const run: Run = async (args, settings = {}) => {
     calls.push({ args, input: settings.input });
@@ -38,12 +35,11 @@ async function scenario(options: { local?: string; sameArch?: boolean; missingHe
     return { stdout, stderr: "", code: 0 };
   };
   let error: unknown;
-  try { await publishSystem(run, directory, options.check); }
+  try { await publishSystem(run, directory, { check: options.check ?? false, image: options.image ?? "ghcr.io/lucasmeijer/agents-in-the-cloud-system" }); }
   catch (caught) { error = caught; }
   finally {
     if (helper === undefined) delete process.env.ATELIER_RELEASE_HELPER; else process.env.ATELIER_RELEASE_HELPER = helper;
     if (token === undefined) delete process.env.GH_PACKAGE_TOKEN; else process.env.GH_PACKAGE_TOKEN = token;
-    if (previousOwner === undefined) delete process.env.GHCR_OWNER; else process.env.GHCR_OWNER = previousOwner;
     rmSync(directory, { recursive: true, force: true });
   }
   return { calls, error };
@@ -71,14 +67,14 @@ for (const local of ["amd64", "arm64"]) {
   });
 }
 
-test("GHCR_OWNER publishes the system image under that owner", async () => {
-  const { calls, error } = await scenario({ owner: "oerd" });
+test("an explicit nested repository selects the publishing target and login owner", async () => {
+  const image = "ghcr.io/oerd/team/agents-in-the-cloud-system";
+  const { calls, error } = await scenario({ image });
   expect(error).toBeUndefined();
   const build = calls.find(({ args }) => args.includes("--push"));
-  expect(build?.args).toContain("GHCR_OWNER=oerd");
-  expect(build?.args.some((arg) => arg.startsWith("ghcr.io/oerd/agents-in-the-cloud-system:sha-"))).toBe(true);
+  expect(build?.args.some((arg) => arg.startsWith(`${image}:sha-`))).toBe(true);
   expect(calls.find(({ args }) => args.includes("login"))?.args).toContain("oerd");
-  expect(calls.some(({ args }) => args.includes("ghcr.io/oerd/agents-in-the-cloud-system:latest"))).toBe(true);
+  expect(calls.some(({ args }) => args.includes(`${image}:latest`))).toBe(true);
 });
 
 test("check probes both native builders without registry authentication or writes", async () => {

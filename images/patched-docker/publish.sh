@@ -1,12 +1,23 @@
 #!/bin/bash
 set -euo pipefail
 context=$(cd "$(dirname "$0")" && pwd)
-root=$(cd "$context/../.." && pwd)
 if [[ -n $(git -C "$context" status --porcelain -- .) ]]; then
     echo 'Commit changes in images/patched-docker before publishing.' >&2
     exit 1
 fi
-owner=$(cd "$root" && bun -e 'import { registryOwnerFrom } from "./packages/core/src/ghcr.ts"; const origin = Bun.spawnSync(["git","remote","get-url","origin"], { stdout: "pipe", stderr: "pipe" }); const url = origin.exitCode === 0 ? origin.stdout.toString().trim() : undefined; process.stdout.write(registryOwnerFrom(Bun.env, url));')
+repository=ghcr.io/lucasmeijer/agents-in-the-cloud-docker
+build_args=()
+while [[ $# -gt 0 ]]; do
+  if [[ "$1" == --image ]]; then
+    [[ $# -ge 2 && -n "$2" && "$2" != --* ]] || { echo '--image requires a repository' >&2; exit 1; }
+    repository="$2"
+    shift 2
+  else
+    build_args+=("$1")
+    shift
+  fi
+done
+owner="$(bun "$context/../../scripts/ghcr-owner.ts" "$repository")"
 token="${GH_PACKAGE_TOKEN:-}"
 if [[ -z "$token" ]]; then
   echo 'GH_PACKAGE_TOKEN is required to publish images to ghcr.io' >&2
@@ -14,7 +25,7 @@ if [[ -z "$token" ]]; then
 fi
 printf '%s' "$token" | docker login ghcr.io --username "$owner" --password-stdin
 revision=$(git -C "$context" rev-parse HEAD)
-image="ghcr.io/${owner}/agents-in-the-cloud-docker:sha-${revision}"
+image="${repository}:sha-${revision}"
 "$context/build.sh" "$image" --push \
-    --label "org.opencontainers.image.revision=${revision}" "$@"
+    --label "org.opencontainers.image.revision=${revision}" "${build_args[@]}"
 docker buildx imagetools inspect "$image"

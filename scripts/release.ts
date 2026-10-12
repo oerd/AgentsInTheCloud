@@ -3,13 +3,10 @@ import { appendFileSync, mkdirSync, renameSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { Type } from "typebox";
 import { Value } from "typebox/value";
-import { imageRepository, registryOwnerFrom, resolveRegistryOwner } from "../packages/core/src/ghcr.ts";
+import { ownerFromRepository, upstreamImageRepository } from "../packages/core/src/ghcr.ts";
 import { authenticateRegistry, commandRunner, ensureBuilders, inspectImage, inspectPlatform, platforms, type Run } from "./release-support.ts";
 import { acquireReleaseLock } from "./release-lock.ts";
 
-function upstreamAppImage(): string {
-  return imageRepository(resolveRegistryOwner(), "app");
-}
 const root = resolve(import.meta.dir, "..");
 export const usage = `Release AgentsInTheCloud from the current origin/main commit.
 
@@ -17,6 +14,7 @@ export const usage = `Release AgentsInTheCloud from the current origin/main comm
   bun run release --stable    Publish latest and stable
   bun run release --check     Check Git, local/SSH Docker builders and both architectures; publish nothing
 
+--image <repository> publishes to an explicit app repository (default: ghcr.io/lucasmeijer/agents-in-the-cloud).
 --check may be combined with --stable. Working files are never released or reset.
 Requires ATELIER_RELEASE_HELPER=[user@]hostname with noninteractive SSH and Docker access.
 Uses the existing GH_PACKAGE_TOKEN for publishing. Logs/status live under Git's
@@ -24,10 +22,19 @@ common directory in agents-in-the-cloud-releases/<run-id>/. See docs/releases.md
 `;
 
 export function parseReleaseArgs(args: string[]) {
-  for (const arg of args) {
-    if (!["--stable", "--check", "--help", "-h"].includes(arg)) throw new Error(`Unknown release option: ${arg}`);
+  let image: string = upstreamImageRepository("app");
+  for (let index = 0; index < args.length; index++) {
+    const arg = args[index]!;
+    if (["--stable", "--check", "--help", "-h"].includes(arg)) continue;
+    if (arg === "--image") {
+      const value = args[++index];
+      if (!value || value.startsWith("--")) throw new Error("--image requires a repository");
+      image = value;
+      continue;
+    }
+    throw new Error(`Unknown release option: ${arg}`);
   }
-  return { stable: args.includes("--stable"), check: args.includes("--check"), help: args.includes("--help") || args.includes("-h") };
+  return { stable: args.includes("--stable"), check: args.includes("--check"), help: args.includes("--help") || args.includes("-h"), image };
 }
 
 type ChannelState = "pending" | "promoting" | "published" | "failed";
@@ -46,7 +53,7 @@ export interface ReleaseStatus {
 }
 const preloadSchema = Type.Array(Type.String({ pattern: "@sha256:[a-f0-9]{64}$" }), { minItems: 1 });
 
-export async function verifyRevision(run: Run, ref: string, commit: string, image = upstreamAppImage()): Promise<string> {
+export async function verifyRevision(run: Run, ref: string, commit: string, image: string): Promise<string> {
   const manifest = (await inspectImage(run, ref))!;
   const dependencies = new Set<string>();
   for (const platform of platforms) {
@@ -62,7 +69,7 @@ export async function verifyRevision(run: Run, ref: string, commit: string, imag
   return manifest.digest;
 }
 
-export async function promoteChannels(run: Run, status: ReleaseStatus, save: () => void, image = upstreamAppImage()): Promise<void> {
+export async function promoteChannels(run: Run, status: ReleaseStatus, save: () => void, image: string): Promise<void> {
   for (const channel of ["latest", "stable"] as const) {
     if (status.channels[channel] === undefined) continue;
     status.phase = `Promote ${channel}`;
@@ -87,9 +94,8 @@ export async function release(options: ReturnType<typeof parseReleaseArgs>, run:
   const phase = (text: string) => { status.phase = text; save(); };
   phase("Resolve origin/main");
   await run(["git", "fetch", "origin", "refs/heads/main"]);
-  const origin = await run(["git", "remote", "get-url", "origin"], { allowFailure: true });
-  const owner = registryOwnerFrom(process.env, origin.code === 0 ? origin.stdout.trim() : undefined);
-  const image = imageRepository(owner, "app");
+  const image = options.image;
+  const owner = ownerFromRepository(image);
   status.commit = (await run(["git", "rev-parse", "FETCH_HEAD^{commit}"])).stdout.trim();
   save();
   phase("Check local and SSH native builders");

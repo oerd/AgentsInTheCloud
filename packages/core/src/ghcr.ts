@@ -1,8 +1,10 @@
 const upstreamOwner = "lucasmeijer";
 
 const ownerPattern = /^[a-z0-9](?:[a-z0-9]|-(?=[a-z0-9])){0,38}$/;
+const repositorySegmentPattern = /^[a-z0-9][a-z0-9._-]*$/;
 
 export type RegistryOwner = string & { readonly RegistryOwner: unique symbol };
+export type GhcrRepository = string & { readonly GhcrRepository: unique symbol };
 
 export const imageNames = {
   app: "agents-in-the-cloud",
@@ -11,13 +13,9 @@ export const imageNames = {
   docker: "agents-in-the-cloud-docker",
 } as const;
 
-export type ImageRole = keyof typeof imageNames;
+export const appRepositoryLabel = "agents-in-the-cloud.app-repository";
 
-export interface OwnerSources {
-  ghcrOwner?: string;
-  githubRepositoryOwner?: string;
-  originUrl?: string;
-}
+export type ImageRole = keyof typeof imageNames;
 
 function isRegistryOwner(value: string): value is RegistryOwner {
   return ownerPattern.test(value);
@@ -29,72 +27,45 @@ export function parseRegistryOwner(value: string): RegistryOwner {
   return owner;
 }
 
-export function githubOwnerFromRemote(url: string): string | undefined {
-  const trimmed = url.trim();
-  if (!trimmed) return undefined;
-  let path: string | undefined;
-  const ssh = /^git@github\.com:(.+)$/.exec(trimmed);
-  if (ssh?.[1]) path = ssh[1];
-  else {
-    let parsed: URL;
-    try {
-      parsed = new URL(trimmed);
-    } catch {
-      return undefined;
-    }
-    if (parsed.hostname !== "github.com") return undefined;
-    path = parsed.pathname.replace(/^\//, "");
-  }
-  const owner = path.replace(/\.git$/, "").split("/")[0];
-  if (!owner || !ownerPattern.test(owner.toLowerCase())) return undefined;
-  return owner;
+export function imageRepository(owner: RegistryOwner, role: ImageRole): GhcrRepository {
+  // SAFETY: RegistryOwner and the fixed image names satisfy the GHCR repository grammar.
+  return `ghcr.io/${owner}/${imageNames[role]}` as GhcrRepository;
 }
 
-export function resolveRegistryOwner(sources: OwnerSources = {}): RegistryOwner {
-  const explicit = sources.ghcrOwner?.trim();
-  if (explicit) return parseRegistryOwner(explicit);
-  const actions = sources.githubRepositoryOwner?.trim();
-  if (actions) return parseRegistryOwner(actions);
-  const fromOrigin = sources.originUrl ? githubOwnerFromRemote(sources.originUrl) : undefined;
-  if (fromOrigin) return parseRegistryOwner(fromOrigin);
-  return parseRegistryOwner(upstreamOwner);
+export function upstreamImageRepository(role: ImageRole): GhcrRepository {
+  return imageRepository(parseRegistryOwner(upstreamOwner), role);
 }
 
-export function registryOwnerFrom(env: { GHCR_OWNER?: string; GITHUB_REPOSITORY_OWNER?: string }, originUrl?: string): RegistryOwner {
-  return resolveRegistryOwner({
-    ghcrOwner: env.GHCR_OWNER,
-    githubRepositoryOwner: env.GITHUB_REPOSITORY_OWNER,
-    originUrl,
-  });
-}
-
-export function imageRepository(owner: RegistryOwner, role: ImageRole): string {
-  return `ghcr.io/${owner}/${imageNames[role]}`;
-}
-
-export function appPackagePath(owner: RegistryOwner): string {
-  return `${owner}/${imageNames.app}`;
-}
-
-export function ghcrRepository(ref: string): string | undefined {
-  const named = (ref.split("@")[0] ?? "").split(":")[0] ?? "";
-  if (!/^ghcr\.io\/[^/]+\/[^/]+$/.test(named)) return undefined;
+function repositoryName(reference: string): string {
+  let named = reference.trim().split("@", 1)[0] ?? "";
+  const tag = named.lastIndexOf(":");
+  if (tag > named.lastIndexOf("/")) named = named.slice(0, tag);
   return named;
 }
 
+/** Returns a normalized GHCR repository, without a tag or digest. */
+export function ghcrRepository(reference: string): GhcrRepository | undefined {
+  const named = repositoryName(reference);
+  if (!named.startsWith("ghcr.io/")) return undefined;
+  const segments = named.slice("ghcr.io/".length).split("/");
+  if (segments.length < 2 || segments.some((segment) => !repositorySegmentPattern.test(segment))) return undefined;
+  // SAFETY: The registry prefix and every path segment were validated above.
+  return named as GhcrRepository;
+}
+
+export function requireGhcrRepository(reference: string): GhcrRepository {
+  const repository = ghcrRepository(reference);
+  if (!repository) throw new Error(`Not a GHCR repository: ${reference}`);
+  return repository;
+}
+
+/** Registry login uses the namespace, while image identity keeps the full repository. */
 export function ownerFromRepository(repository: string): RegistryOwner {
-  const match = /^ghcr\.io\/([^/]+)\/[^/]+$/.exec(repository);
-  if (!match?.[1]) throw new Error(`Not a GHCR repository: ${repository}`);
-  return parseRegistryOwner(match[1]);
+  const normalized = requireGhcrRepository(repository);
+  return parseRegistryOwner(normalized.slice("ghcr.io/".length).split("/", 1)[0]!);
 }
 
-export function selectAppRepository(input: { appImage?: string; ghcrOwner?: string } = {}): string {
-  const fromImage = input.appImage ? ghcrRepository(input.appImage) : undefined;
-  if (fromImage) return fromImage;
-  return imageRepository(resolveRegistryOwner({ ghcrOwner: input.ghcrOwner }), "app");
-}
-
-export function channelRepository(input: { remembered?: string; ghcrOwner?: string } = {}): string {
-  if (input.remembered && ghcrRepository(input.remembered) === input.remembered) return input.remembered;
-  return imageRepository(resolveRegistryOwner({ ghcrOwner: input.ghcrOwner }), "app");
+/** Non-GHCR development images keep the established upstream update line. */
+export function appRepositoryFromImage(reference: string): GhcrRepository {
+  return ghcrRepository(reference) ?? upstreamImageRepository("app");
 }
