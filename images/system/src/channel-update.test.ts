@@ -2,10 +2,14 @@ import { afterEach, beforeEach, expect, mock, test } from "bun:test";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { prepareChannelUpdate } from "./channel-update.ts";
+import { prepareChannelUpdate as prepareWithRepository } from "./channel-update.ts";
 
 let directory: string;
 let settingsPath: string;
+
+function prepareChannelUpdate(path: string, images: Parameters<typeof prepareWithRepository>[2], repository = "ghcr.io/lucasmeijer/agents-in-the-cloud") {
+  return prepareWithRepository(path, repository, images);
+}
 
 beforeEach(async () => {
   directory = await mkdtemp(join(tmpdir(), "agents-in-the-cloud-channel-update-"));
@@ -112,6 +116,12 @@ test("always completes a fresh pull before inspecting and returns the exact imag
     "pulled:2",
     "inspect:ghcr.io/lucasmeijer/agents-in-the-cloud:latest",
   ]);
+});
+
+test("channel pull uses the installed repository", async () => {
+  const images = imageOperations();
+  expect(await prepareChannelUpdate(settingsPath, images, "ghcr.io/oerd/agents-in-the-cloud")).toBe("sha256:resolved-app");
+  expect(images.pull).toHaveBeenCalledWith("ghcr.io/oerd/agents-in-the-cloud:latest");
 });
 
 test("inspect failures propagate", async () => {

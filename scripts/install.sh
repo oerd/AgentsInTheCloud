@@ -3,6 +3,7 @@ set -Eeuo pipefail
 
 system_image=ghcr.io/lucasmeijer/agents-in-the-cloud-system:latest
 app_image=ghcr.io/lucasmeijer/agents-in-the-cloud:latest
+system_image_explicit=0
 action=""
 uninstall_requested=0
 access_mode=""
@@ -113,21 +114,22 @@ trap 'fail "Installation could not continue. See the bootstrap log for details."
 trap 'fail "Installation interrupted."' INT TERM
 
 usage() {
-  cat <<'HELP'
+  cat <<HELP
 Usage: install.sh [options]
 
 Installs AgentsInTheCloud System, or offers actions for an existing installation.
 System replacements preserve the agents-in-the-cloud-system volume and interrupt workspaces.
 Update also installs the newest AgentsInTheCloud app on the installation's selected channel.
 
-  --system-image REF   System image (default: ghcr.io/lucasmeijer/agents-in-the-cloud-system:latest)
-  --app-image REF      First-install app image (default: ghcr.io/lucasmeijer/agents-in-the-cloud:latest)
+  --system-image REF   System image (default: ${system_image})
+  --app-image REF      First-install app image (default: ${app_image})
   --access-mode MODE  localhost or tailscale (default selected for this machine)
   --action ACTION     install, update, connect, or open
                       connect enables Tailscale without replacing an existing installation
   --uninstall         Permanently delete installation data (also supports Atelier System)
   -h, --help          Show help
 
+Fork installations should pass both --system-image and --app-image explicitly.
 The app image is only used when System has no persisted app selection.
 There is no migration from the previous AgentsInTheCloud installation layout.
 HELP
@@ -138,7 +140,7 @@ while [ "$#" -gt 0 ]; do
     --system-image|--app-image|--action|--access-mode)
       [ "$#" -ge 2 ] && [ -n "$2" ] || fail "$1 requires a value"
       case "$1" in
-        --system-image) system_image="$2" ;;
+        --system-image) system_image="$2"; system_image_explicit=1 ;;
         --app-image) app_image="$2" ;;
         --action) action="$2" ;;
         --access-mode) access_mode="$2" ;;
@@ -235,7 +237,13 @@ if [ "$action" != uninstall ] && [ "$host_os" = Linux ] && [ "$desktop" -eq 0 ];
 fi
 
 installed=0
-if docker container inspect "$system_name" >/dev/null 2>&1; then installed=1; fi
+if docker container inspect "$system_name" >/dev/null 2>&1; then
+  installed=1
+  if [ "$action" != uninstall ] && [ "$system_image_explicit" -eq 0 ]; then
+    system_image="$(docker inspect --format '{{.Config.Image}}' "$system_name")"
+    [ -n "$system_image" ] || fail "Docker returned no image for the existing AgentsInTheCloud System"
+  fi
+fi
 # Keep the legacy cleanup implementation frozen: it knows Atelier's names,
 # socket, storage, inventory contract, and DELETE ATELIER confirmation.
 if [ "$action" = uninstall ]; then

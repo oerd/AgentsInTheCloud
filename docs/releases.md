@@ -3,9 +3,10 @@
 The app’s **Update channel** follows either the published `latest` image or the image promoted to `stable`. Those image tags remain the publication boundary.
 
 ```sh
-bun run release             # latest
-bun run release --stable    # latest and stable
-bun run release --check     # validate the builder without publishing
+bun run release                                                     # upstream latest
+bun run release --stable                                            # upstream latest and stable
+bun run release --image ghcr.io/example/agents-in-the-cloud         # explicit fork target
+bun run release --check                                             # validate the builder without publishing
 ```
 
 This branch publishes `ghcr.io/lucasmeijer/agents-in-the-cloud:latest` and
@@ -20,19 +21,21 @@ App, System and workspace images pin its multi-platform digest; commit updated
 pins before releasing.
 
 For the VM test, publish this branch's app and separately publish its System image
-as `ghcr.io/lucasmeijer/agents-in-the-cloud-system:latest` (`images/system/publish.sh` moves latest); this release command
+as `ghcr.io/lucasmeijer/agents-in-the-cloud-system:latest` (`images/system/publish.sh --image ghcr.io/example/agents-in-the-cloud-system` selects a fork target and moves its latest tag); this release command
 publishes only the app and its workspace dependency. Use the branch's installer
 (which defaults to latest images) and record both tested image digests. The new
 installation starts empty: do not mount Atelier storage or import its settings.
 Test installation, workspace creation/parking, updates, restart and uninstall
 before promoting to stable. Publishing to the renamed repositories does not
 replace the public Atelier installer or advance Atelier's update tags.
-The installer supports removing a legacy Atelier installation with `--uninstall`.
+A fork installation must pass both `--system-image ghcr.io/example/agents-in-the-cloud-system:latest` and `--app-image ghcr.io/example/agents-in-the-cloud:latest`; later installer updates preserve the installed System repository. The installer supports removing a legacy Atelier installation with `--uninstall`.
 
 Existing `ATELIER_*` environment/build-argument names remain unchanged; defaults,
 storage names, labels and runtime protocols do not adopt Atelier state.
 
 Publishing requires the existing `GH_PACKAGE_TOKEN` with GHCR package write access.
+Publishers default to `ghcr.io/lucasmeijer/...`; fork publishers select the complete target with `--image`.
+Docker login uses the first namespace segment of that explicit repository.
 Docker, Buildx, Bun and Git are required and supplied by the Atelier workspace.
 The release CLI runs on Linux and macOS; it calls the native OS locking API through
 Bun rather than requiring a `flock` executable. No GitHub Actions or host Docker

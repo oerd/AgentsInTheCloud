@@ -7,7 +7,7 @@ import { publishSystem } from "./publish.ts";
 
 const revision = "a".repeat(40);
 const digest = (arch: string) => `sha256:${(arch === "amd64" ? "1" : "2").repeat(64)}`;
-async function scenario(options: { local?: string; sameArch?: boolean; missingHelper?: boolean; check?: boolean; wrongRevision?: boolean; buildFails?: boolean } = {}) {
+async function scenario(options: { local?: string; sameArch?: boolean; missingHelper?: boolean; check?: boolean; wrongRevision?: boolean; buildFails?: boolean; image?: string } = {}) {
   const directory = mkdtempSync(join(tmpdir(), "system-publish-test-"));
   const helper = process.env.ATELIER_RELEASE_HELPER;
   const token = process.env.GH_PACKAGE_TOKEN;
@@ -35,7 +35,7 @@ async function scenario(options: { local?: string; sameArch?: boolean; missingHe
     return { stdout, stderr: "", code: 0 };
   };
   let error: unknown;
-  try { await publishSystem(run, directory, options.check); }
+  try { await publishSystem(run, directory, { check: options.check ?? false, image: options.image ?? "ghcr.io/lucasmeijer/agents-in-the-cloud-system" }); }
   catch (caught) { error = caught; }
   finally {
     if (helper === undefined) delete process.env.ATELIER_RELEASE_HELPER; else process.env.ATELIER_RELEASE_HELPER = helper;
@@ -66,6 +66,16 @@ for (const local of ["amd64", "arm64"]) {
     expect(calls.flatMap(call => call.args)).not.toContain("test-package-token");
   });
 }
+
+test("an explicit nested repository selects the publishing target and login owner", async () => {
+  const image = "ghcr.io/oerd/team/agents-in-the-cloud-system";
+  const { calls, error } = await scenario({ image });
+  expect(error).toBeUndefined();
+  const build = calls.find(({ args }) => args.includes("--push"));
+  expect(build?.args.some((arg) => arg.startsWith(`${image}:sha-`))).toBe(true);
+  expect(calls.find(({ args }) => args.includes("login"))?.args).toContain("oerd");
+  expect(calls.some(({ args }) => args.includes(`${image}:latest`))).toBe(true);
+});
 
 test("check probes both native builders without registry authentication or writes", async () => {
   const { calls, error } = await scenario({ check: true });

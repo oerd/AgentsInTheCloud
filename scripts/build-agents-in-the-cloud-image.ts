@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 
 import { workloadCgroupArgs } from "@agents-in-the-cloud/core";
+import { ownerFromRepository, upstreamImageRepository } from "../packages/core/src/ghcr.ts";
 import { rmSync } from "node:fs";
 import { arch } from "node:os";
 import { imageHasPlatforms } from "../packages/workspace-image/src/local-images.ts";
@@ -65,7 +66,7 @@ function takeValue(args: string[], index: number, flag: string): string {
 
 function parseArgs(args: string[]): Options {
   const options: Options = {
-    image: "ghcr.io/lucasmeijer/agents-in-the-cloud",
+    image: upstreamImageRepository("app"),
     tags: [],
     latest: true,
     stable: false,
@@ -113,8 +114,9 @@ function parseArgs(args: string[]): Options {
       i++;
     } else if (arg === "--build-arg") {
       const value = takeValue(args, i, arg);
-      if (["ATELIER_DEFAULT_WORKSPACE_IMAGE", "ATELIER_EAGERLY_PRELOAD"].includes(value.split("=")[0]!)) {
-        fail("The release script owns the default workspace reference and preload label");
+      const buildArgName = value.split("=")[0]!;
+      if (["ATELIER_DEFAULT_WORKSPACE_IMAGE", "ATELIER_EAGERLY_PRELOAD"].includes(buildArgName)) {
+        fail(`The image build owns ${buildArgName}`);
       }
       options.buildArgs.push(value);
       i++;
@@ -161,7 +163,7 @@ function authenticateGhcr(options: Options): void {
   if (!token) throw new Error("GH_PACKAGE_TOKEN is required to publish images to ghcr.io");
 
   const result = Bun.spawnSync(
-    ["docker", "login", "ghcr.io", "--username", "lucasmeijer", "--password-stdin"],
+    ["docker", "login", "ghcr.io", "--username", ownerFromRepository(options.image), "--password-stdin"],
     { stdin: new TextEncoder().encode(token), stdout: "inherit", stderr: "inherit" },
   );
   if (result.exitCode !== 0) throw new Error(`docker login ghcr.io failed with exit code ${result.exitCode}`);
@@ -204,7 +206,6 @@ function gitCommitId(): string {
 }
 
 function workspaceImageRepository(appImage: string): string {
-  if (appImage === "ghcr.io/lucasmeijer/agents-in-the-cloud") return "ghcr.io/lucasmeijer/agents-in-the-cloud-workspace";
   return `${appImage}-workspace`;
 }
 

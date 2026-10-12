@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { parseWwwAuthenticate, selectManifestFromIndex, fetchChannelImageMetadata, resolveImage } from "../../src/server/registry.ts";
+import { parseWwwAuthenticate, selectManifestFromIndex, fetchChannelImageMetadata as fetchRepositoryMetadata, resolveImage } from "../../src/server/registry.ts";
+
+function fetchChannelImageMetadata(channel: Parameters<typeof fetchRepositoryMetadata>[1], fetcher?: Parameters<typeof fetchRepositoryMetadata>[2], platform?: Parameters<typeof fetchRepositoryMetadata>[3]) {
+  return fetchRepositoryMetadata("ghcr.io/lucasmeijer/agents-in-the-cloud", channel, fetcher, platform);
+}
+
 describe("registry helpers", () => {
   test("parses bearer auth challenge", () => {
     expect(parseWwwAuthenticate('Bearer realm="https://ghcr.io/token",service="ghcr.io",scope="repository:lucasmeijer/agents-in-the-cloud:pull"')).toEqual({
@@ -130,6 +135,21 @@ test("tag plus digest references use the repository path and preserve the pinned
   }, { os: "linux", architecture: "amd64" });
   expect(calls[0]).toBe(`https://ghcr.io/v2/example/workspace/manifests/${index}`);
   expect(result.reference).toBe(`ghcr.io/example/workspace@${index}`);
+});
+
+test("channel discovery uses the complete installed repository", async () => {
+  const repository = "ghcr.io/oerd/team/agents-in-the-cloud-dev";
+  const fetcher = async (input: URL | RequestInfo) => {
+    const url = String(input);
+    if (url === "https://ghcr.io/v2/oerd/team/agents-in-the-cloud-dev/manifests/latest") {
+      return Response.json({ config: { digest: "sha256:latest-config" }, layers: [] }, { headers: { "docker-content-digest": "sha256:fork" } });
+    }
+    if (url === "https://ghcr.io/v2/oerd/team/agents-in-the-cloud-dev/blobs/sha256:latest-config") {
+      return Response.json({ os: "linux", architecture: process.arch === "arm64" ? "arm64" : "amd64", config: { Labels: { "org.opencontainers.image.revision": "fork-revision" } } });
+    }
+    throw new Error(`unexpected fetch ${url}`);
+  };
+  await expect(fetchRepositoryMetadata(repository, "latest", fetcher)).resolves.toEqual({ digest: "sha256:fork", revision: "fork-revision" });
 });
 
 test("latest discovery only requests the new product's latest tag", async () => {

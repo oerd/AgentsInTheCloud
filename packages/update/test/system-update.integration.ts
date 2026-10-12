@@ -57,7 +57,7 @@ async function build(tag: string, dockerfile: string) {
 }
 function manager(digest: string) {
   return new UpdateManager({
-    detectRuntime: async () => ({ currentDigest: `sha256:${"0".repeat(64)}` }),
+    detectRuntime: async () => ({ repository: "ghcr.io/lucasmeijer/agents-in-the-cloud", currentDigest: `sha256:${"0".repeat(64)}` }),
     // Fixture registry supplies immutable manifests; preparation is the production code.
     fetchMetadata: async () => ({ digest }),
     prepareUpdate: (reference, progress) => prepareUpdate(`${registry}/agents-in-the-cloud@${reference.split("@")[1]}`, progress),
