@@ -16,7 +16,7 @@ afterEach(async () => {
 });
 
 function jwt(account: string, exp: number): string {
-  const payload = { exp, "https://api.openai.com/auth": { chatgpt_account_id: account } };
+  const payload = { exp, "https://api.openai.com/auth": { chatgpt_account_id: account }, "https://api.openai.com/profile": { email: "saved@example.com" } };
   return `eyJhbGciOiJub25lIn0.${Buffer.from(JSON.stringify(payload)).toString("base64url")}.real-signature`;
 }
 

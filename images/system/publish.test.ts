@@ -4,10 +4,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type Run } from "../../scripts/release-support.ts";
 import { publishSystem } from "./publish.ts";
+import { systemVersion } from "../../packages/shared/src/system-version.ts";
 
 const revision = "a".repeat(40);
 const digest = (arch: string) => `sha256:${(arch === "amd64" ? "1" : "2").repeat(64)}`;
-async function scenario(options: { local?: string; sameArch?: boolean; missingHelper?: boolean; check?: boolean; wrongRevision?: boolean; buildFails?: boolean; image?: string } = {}) {
+async function scenario(options: { local?: string; sameArch?: boolean; missingHelper?: boolean; check?: boolean; stable?: boolean; wrongRevision?: boolean; buildFails?: boolean; image?: string } = {}) {
   const directory = mkdtempSync(join(tmpdir(), "system-publish-test-"));
   const helper = process.env.ATELIER_RELEASE_HELPER;
   const token = process.env.GH_PACKAGE_TOKEN;
@@ -35,7 +36,7 @@ async function scenario(options: { local?: string; sameArch?: boolean; missingHe
     return { stdout, stderr: "", code: 0 };
   };
   let error: unknown;
-  try { await publishSystem(run, directory, { check: options.check ?? false, image: options.image ?? "ghcr.io/lucasmeijer/agents-in-the-cloud-system" }); }
+  try { await publishSystem(run, directory, { check: options.check ?? false, stable: options.stable ?? false, image: options.image ?? "ghcr.io/lucasmeijer/agents-in-the-cloud-system" }); }
   catch (caught) { error = caught; }
   finally {
     if (helper === undefined) delete process.env.ATELIER_RELEASE_HELPER; else process.env.ATELIER_RELEASE_HELPER = helper;
@@ -56,6 +57,7 @@ for (const local of ["amd64", "arm64"]) {
       expect(args[2] === "local").toBe(platform === `linux/${local}`);
       expect(args).not.toContain("linux/arm64,linux/amd64");
       expect(args).not.toContain("--builder");
+      expect(args).toContain(`org.agents-in-the-cloud.system-version=${systemVersion}`);
     }
     const merge = calls.find(({ args }) => args.includes("imagetools") && args.includes("create"))!;
     expect(merge.args.slice(-2)).toEqual(["amd64", "arm64"].map(arch => `ghcr.io/lucasmeijer/agents-in-the-cloud-system@${digest(arch)}`));
@@ -75,6 +77,21 @@ test("an explicit nested repository selects the publishing target and login owne
   expect(build?.args.some((arg) => arg.startsWith(`${image}:sha-`))).toBe(true);
   expect(calls.find(({ args }) => args.includes("login"))?.args).toContain("oerd");
   expect(calls.some(({ args }) => args.includes(`${image}:latest`))).toBe(true);
+});
+
+test("--stable also moves stable to the verified combined digest", async () => {
+  const { calls, error } = await scenario({ stable: true });
+  expect(error).toBeUndefined();
+  const promotions = calls.filter(({ args }) => args.includes("imagetools") && args.includes("create") && args.at(-1) === `ghcr.io/lucasmeijer/agents-in-the-cloud-system@sha256:${"3".repeat(64)}`);
+  expect(promotions.map(({ args }) => args.at(-2))).toEqual(["ghcr.io/lucasmeijer/agents-in-the-cloud-system:latest", "ghcr.io/lucasmeijer/agents-in-the-cloud-system:stable"]);
+});
+
+test("--stable on a fork repository moves that repository's stable tag", async () => {
+  const image = "ghcr.io/oerd/agents-in-the-cloud-system";
+  const { calls, error } = await scenario({ image, stable: true });
+  expect(error).toBeUndefined();
+  const promotions = calls.filter(({ args }) => args.includes("imagetools") && args.includes("create") && args.at(-1) === `${image}@sha256:${"3".repeat(64)}`);
+  expect(promotions.map(({ args }) => args.at(-2))).toEqual([`${image}:latest`, `${image}:stable`]);
 });
 
 test("check probes both native builders without registry authentication or writes", async () => {

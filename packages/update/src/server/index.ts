@@ -1,20 +1,29 @@
+import { dialogHtml } from "@agents-in-the-cloud/design-system/dialog";
+import { renderMarkdown } from "@agents-in-the-cloud/markdown";
+import { fetchReleaseHistory } from "./release-history.ts";
 import { buttonHtml } from "@agents-in-the-cloud/design-system/button";
 import { destructiveConfirmationHtml } from "@agents-in-the-cloud/design-system/destructive-confirmation";
 import { Icons } from "@agents-in-the-cloud/design-system/icons";
 import { progressButtonHtml } from "@agents-in-the-cloud/design-system/progress-button";
 import { toggleHtml } from "@agents-in-the-cloud/design-system/toggle";
 import { transientFeedbackHtml } from "@agents-in-the-cloud/design-system/transient-feedback";
+import { copyButtonHtml } from "@agents-in-the-cloud/design-system/copy-button";
+import { warningBannerHtml } from "@agents-in-the-cloud/design-system/warning-banner";
+import { requiredSystemVersion } from "@agents-in-the-cloud/shared/system-version";
 import { errorMessage, escapeHtml, turboStream, turboStreamResponse, type SettingsContribution, type WorkspaceModule, type WorkspaceServerModuleContext } from "@agents-in-the-cloud/shared";
 import { isUpdateChannel, type UpdateChannel } from "./update-channel.ts";
 import { detectSelfUpdateRuntime, prepareUpdate, type PreparedUpdate, type PullProgress, type SelfUpdateRuntime } from "./docker.ts";
 import { fetchChannelImageMetadata, type ImageMetadata } from "./registry.ts";
 import { readStoredUpdateChannel, writeStoredUpdateChannel } from "./settings-store.ts";
-import { requestSupervisorUpdate } from "./supervisor.ts";
+import { readSystemVersion, requestSupervisorUpdate } from "./supervisor.ts";
 
 const updateSidebarContributionId = "agents-in-the-cloud-update";
 const pollIntervalMs = 5 * 60 * 1000;
 
-type UpdateState = "idle" | "checking" | "available" | "pulling" | "ready_to_restart" | "failed" | "restarting";
+/** installer_required: Download was chosen, but this update needs a newer System, so only the installer can install it. */
+type UpdateState = "idle" | "checking" | "available" | "installer_required" | "pulling" | "ready_to_restart" | "failed" | "restarting";
+
+const installerCommand = "curl -fsSL https://agentsinthecloud.com/install.sh | bash";
 
 interface StateSnapshot {
   state: UpdateState;
@@ -24,15 +33,21 @@ interface StateSnapshot {
   target?: ImageMetadata;
   updateChannel: UpdateChannel;
   progressMessage?: string;
+  /** This app needs a newer System than the one running it: the installer finishes the update. */
+  systemOutdated: boolean;
+  /** The offered update needs a newer System, so only the installer can install it. */
+  targetNeedsInstaller: boolean;
 }
 
 export interface UpdateManagerDeps {
+  fetchReleaseHistory?: typeof fetchReleaseHistory;
   readChannel?: () => Promise<UpdateChannel | undefined>;
   writeChannel?: (channel: UpdateChannel) => Promise<void>;
   detectRuntime?: () => Promise<SelfUpdateRuntime | undefined>;
   fetchMetadata?: (repository: string, channel: UpdateChannel) => Promise<ImageMetadata>;
   prepareUpdate?: (reference: string, onProgress: (progress: PullProgress) => void) => Promise<PreparedUpdate>;
   requestUpdate?: (imageId: string) => Promise<void>;
+  readSystemVersion?: () => Promise<number>;
   setInterval?: (handler: () => void, interval: number) => void;
 }
 
@@ -42,6 +57,8 @@ class UpdateConflictError extends Error {}
 export class UpdateManager {
   private context: WorkspaceServerModuleContext | undefined;
   private runtime: SelfUpdateRuntime | undefined;
+  /** Read once: System only changes by reinstalling, which restarts the app. */
+  private systemVersion: number | undefined;
   private state: UpdateState = "idle";
   private percent: number | undefined;
   private error: string | undefined;
@@ -60,6 +77,7 @@ export class UpdateManager {
     this.context = context;
     this.runtime = await (this.deps.detectRuntime ?? detectSelfUpdateRuntime)();
     this.updateChannel = await this.deps.readChannel?.() ?? "latest";
+    if (this.runtime) this.systemVersion = await (this.deps.readSystemVersion ?? readSystemVersion)();
     this.updateSidebar();
     if (!this.runtime) return;
     await this.checkNow().catch((error) => console.error("Update check failed", error));
@@ -73,7 +91,9 @@ export class UpdateManager {
   }
 
   snapshot(): StateSnapshot {
-    return { state: this.state, percent: this.percent, error: this.error, selfUpdatable: Boolean(this.runtime), target: this.target, updateChannel: this.updateChannel, progressMessage: this.progressMessage };
+    const systemOutdated = this.systemVersion !== undefined && requiredSystemVersion > this.systemVersion;
+    const targetNeedsInstaller = this.target !== undefined && this.systemVersion !== undefined && this.target.requiredSystemVersion > this.systemVersion;
+    return { state: this.state, percent: this.percent, error: this.error, selfUpdatable: Boolean(this.runtime), target: this.target, updateChannel: this.updateChannel, progressMessage: this.progressMessage, systemOutdated, targetNeedsInstaller };
   }
 
   private updateSidebar(checked = false): void {
@@ -106,11 +126,14 @@ export class UpdateManager {
       throw error;
     }
     if (generation !== this.channelGeneration || this.pullPromise || this.prepared || this.restarting) return;
+    const previous = this.target;
     this.target = target;
     const current = this.runtime.currentRevision ?? this.runtime.currentDigest;
     const remote = target.revision ?? target.digest;
     const available = Boolean(remote && current && remote !== current);
     if (!available) this.setState("idle", {}, options.announceCurrent ?? false);
+    // Keep pointing to the installer until it's dismissed or a different update appears.
+    else if (this.state === "installer_required" && previous?.digest === target.digest) this.setState("installer_required");
     else this.setState("available");
   }
 
@@ -138,6 +161,11 @@ export class UpdateManager {
     if (this.pullPromise) return this.pullPromise;
     if (!this.target || (this.state !== "available" && this.state !== "failed")) {
       throw new UpdateConflictError("No update is available to download. Check the selected channel first.");
+    }
+    // Updates needing a newer System are offered like any other; only choosing one reveals the installer is needed.
+    if (this.snapshot().targetNeedsInstaller) {
+      this.setState("installer_required");
+      return Promise.resolve();
     }
     this.pullPromise = this.pullNewestTarget().catch((error) => {
       this.setState("failed", { error: errorMessage(error) });
@@ -175,6 +203,15 @@ export class UpdateManager {
     }
   }
 
+  async releaseHistory() {
+    if (!this.runtime?.currentRevision || !this.target?.revision) throw new Error("This installation or update does not identify its code revision, so we can’t show the changes between them.");
+    return await (this.deps.fetchReleaseHistory ?? fetchReleaseHistory)(this.runtime.repository, this.runtime.currentRevision, this.target.revision);
+  }
+
+  dismissInstaller(): void {
+    if (this.state === "installer_required") this.setState("available");
+  }
+
   clearError(): void {
     this.error = undefined;
     this.updateSidebar();
@@ -199,7 +236,8 @@ function renderCheckForm(): string {
 
 function renderDownloadControl(snapshot: StateSnapshot): string {
   const content = {
-    initialContent: { kind: "text" as const, text: "Download update" },
+    // Updates the installer must install aren't downloaded here; choosing one explains how to get it.
+    initialContent: { kind: "text" as const, text: snapshot.targetNeedsInstaller ? "Get update" : "Download update" },
     progressContent: { kind: "text" as const, text: "Downloading…" },
     variant: "primary" as const,
     type: "submit" as const,
@@ -243,6 +281,29 @@ function renderCheckFeedback(state: "initial" | "in-progress", feedback = false)
   });
 }
 
+function renderInstallerCopy(): string {
+  return copyButtonHtml({ label: "Copy installer command", caption: "Copy installer command", copyText: installerCommand });
+}
+
+/** Shown while this app runs on a System older than it needs, whatever else the updater is doing. */
+function renderSystemOutdated(snapshot: StateSnapshot): string {
+  if (!snapshot.systemOutdated) return "";
+  return warningBannerHtml({
+    title: "Finish updating",
+    message: "Some features won’t work until you run the installer again on the computer AgentsInTheCloud is installed on. Existing workspaces will survive but be interrupted.",
+    actionsHtml: renderInstallerCopy(),
+  });
+}
+
+/** Replaces the update row after Download was chosen for an update only the installer can install. */
+function renderInstallerRequired(): string {
+  return warningBannerHtml({
+    message: "To get this version, run the installer again on the computer AgentsInTheCloud is installed on. Existing workspaces will survive but be interrupted.",
+    actionsHtml: renderInstallerCopy(),
+    dismiss: { action: "/update/dismiss-installer", state: "installer_required" },
+  });
+}
+
 function renderUpdateControl(snapshot: StateSnapshot, surface: UpdateControlSurface): string {
   if (snapshot.state === "checking") return renderCheckFeedback("in-progress");
   if (!snapshot.selfUpdatable) return "";
@@ -263,6 +324,7 @@ function updateDescription(snapshot: StateSnapshot): string {
     case "idle": return "Check for new updates.";
     case "checking": return "Checking for updates…";
     case "available": return "An update is available.";
+    case "installer_required": return "";
     case "pulling": return "Downloading the update…";
     case "ready_to_restart": return "";
     case "restarting": return "";
@@ -274,7 +336,8 @@ function renderUpdateSettings(updateManager: UpdateManager, checked = false): st
   const snapshot = updateManager.snapshot();
   const control = checked && snapshot.state === "idle" ? renderCheckFeedback("initial", true) : renderUpdateControl(snapshot, "settings");
   const description = updateDescription(snapshot);
-  return `<section class="settings-sec update-settings-control" id="settings-sec-update"><div class="update-settings-summary"><h2>Updates</h2>${description ? `<p class="settings-sub">${description}</p>` : ""}</div><div class="update-actions">${control}</div>${renderError(snapshot)}</section>`;
+  if (snapshot.state === "installer_required") return `<section class="settings-sec update-settings-control" id="settings-sec-update">${renderSystemOutdated(snapshot)}<div class="update-settings-summary"><h2>Updates</h2></div>${renderInstallerRequired()}</section>`;
+  return `<section class="settings-sec update-settings-control" id="settings-sec-update">${renderSystemOutdated(snapshot)}<div class="update-settings-summary"><h2>Updates</h2>${description ? `<p class="settings-sub">${description}</p>` : ""}</div><div class="update-actions">${control}${renderNotesButton(snapshot, "settings")}</div>${renderError(snapshot)}<turbo-frame id="update_notes_settings"></turbo-frame></section>`;
 }
 
 function renderUpdateChannelSettings(updateManager: UpdateManager): string {
@@ -313,9 +376,23 @@ const updateChannelSettingsContribution: SettingsContribution = {
 };
 
 function renderSidebarRow(snapshot: StateSnapshot): string {
+  if (snapshot.systemOutdated) return `<section class="update-sidebar-section"><div id="update_sidebar_row" class="update-sidebar-row">${renderSystemOutdated(snapshot)}</div></section>`;
   if (!snapshot.selfUpdatable || snapshot.state === "idle" || snapshot.state === "checking") return "";
+  if (snapshot.state === "installer_required") return `<section class="update-sidebar-section"><div id="update_sidebar_row" class="update-sidebar-row">${renderInstallerRequired()}</div></section>`;
   const description = updateDescription(snapshot);
-  return `<section class="update-sidebar-section"><div id="update_sidebar_row" class="update-sidebar-row">${description ? `<p>${description}</p>` : ""}<div class="update-actions">${renderUpdateControl(snapshot, "sidebar")}</div>${renderError(snapshot)}</div></section>`;
+  return `<section class="update-sidebar-section"><div id="update_sidebar_row" class="update-sidebar-row">${description ? `<p>${description}</p>` : ""}<div class="update-actions">${renderUpdateControl(snapshot, "sidebar")}${renderNotesButton(snapshot, "sidebar")}</div>${renderError(snapshot)}<turbo-frame id="update_notes_sidebar"></turbo-frame></div></section>`;
+}
+
+function renderNotesButton(snapshot: StateSnapshot, surface: UpdateControlSurface): string {
+  if (!snapshot.target || snapshot.state === "idle" || snapshot.state === "checking") return "";
+  return `<form method="get" action="/update/notes" data-turbo="true" data-turbo-frame="update_notes_${surface}"><input type="hidden" name="surface" value="${surface}">${buttonHtml({ type: "submit", variant: "secondary", content: { kind: "caption", caption: "What’s new" } })}</form>`;
+}
+
+async function renderReleaseNotes(updateManager: UpdateManager): Promise<string> {
+  const history = await updateManager.releaseHistory();
+  const notes = history.releases.map(release => `<article><p class="settings-sub">${escapeHtml(release.id)} · ${escapeHtml(release.publishedAt.slice(0, 10))}</p><div class="markdown">${renderMarkdown("", release.notes)}</div></article>`).join("");
+  const unfinished = !history.targetHasNotes ? "<p>This build also includes changes that haven’t been included in stable release notes yet.</p>" : "";
+  return `${notes || "<p>No published stable release notes between these versions.</p>"}${unfinished}<p><a href="${escapeHtml(history.compareUrl)}" target="_blank" rel="noopener noreferrer">View changes on GitHub</a></p>`;
 }
 
 function renderError(snapshot: StateSnapshot): string {
@@ -326,7 +403,24 @@ function renderError(snapshot: StateSnapshot): string {
 
 export function createUpdateRouteHandler(updateManager: UpdateManager): (request: Request, url: URL) => Promise<Response | undefined> {
   return async (request, url) => {
+    if (url.pathname === "/update/notes" && request.method === "GET") {
+      const surface = url.searchParams.get("surface");
+      if (surface !== "settings" && surface !== "sidebar") return new Response("Missing update control surface", { status: 400 });
+      let bodyHtml: string;
+      try {
+        bodyHtml = await renderReleaseNotes(updateManager);
+      } catch (error) {
+        console.error("Release notes failed", error);
+        bodyHtml = `<p role="alert">${escapeHtml(errorMessage(error))}</p><p>You can still download the update. Try opening What’s new again in a moment.</p>`;
+      }
+      const dialog = dialogHtml({ element: { attributesHtml: 'data-dialog-auto-show' }, iconHtml: "", titleCaption: "What’s new", bodyHtml });
+      return new Response(`<turbo-frame id="update_notes_${surface}">${dialog}</turbo-frame>`, { headers: { "content-type": "text/html; charset=utf-8" } });
+    }
     if (request.method === "POST" && (url.pathname.startsWith("/update/") || url.pathname === "/settings/update-channel") && !updateManager.snapshot().selfUpdatable) return new Response("Updates require AgentsInTheCloud System", { status: 409 });
+    if (url.pathname === "/update/dismiss-installer" && request.method === "POST") {
+      updateManager.dismissInstaller();
+      return turboStreamResponse("");
+    }
     if (url.pathname === "/update/dismiss-error" && request.method === "POST") {
       updateManager.clearError();
       return turboStreamResponse("");

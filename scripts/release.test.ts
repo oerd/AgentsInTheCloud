@@ -3,7 +3,7 @@ import { expect, test } from "bun:test";
 import { chmodSync, cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
-import { parseReleaseArgs, promoteChannels, release, verifyRevision, type ReleaseStatus } from "./release.ts";
+import { assertChannelSystemsSupportApp, parseReleaseArgs, promoteChannels, release, verifyRevision, type ReleaseStatus } from "./release.ts";
 
 const commit = "a".repeat(40);
 const digest = `sha256:${"b".repeat(64)}`;
@@ -19,8 +19,8 @@ function status(stable = false): ReleaseStatus {
 }
 
 test("release only supports latest or both, plus non-publishing checks", () => {
-  expect(parseReleaseArgs([])).toEqual({ stable: false, check: false, help: false, image: appRepository });
-  expect(parseReleaseArgs(["--stable", "--check", "--image", "ghcr.io/oerd/team/app"])).toEqual({ stable: true, check: true, help: false, image: "ghcr.io/oerd/team/app" });
+  expect(parseReleaseArgs([])).toEqual({ stable: false, check: false, help: false, prepare: false, image: appRepository });
+  expect(parseReleaseArgs(["--stable", "--check", "--image", "ghcr.io/oerd/team/app"])).toEqual({ stable: true, check: true, help: false, prepare: false, image: "ghcr.io/oerd/team/app" });
   expect(() => parseReleaseArgs(["--channel", "stable"])).toThrow("Unknown release option");
   expect(() => parseReleaseArgs(["--image"])).toThrow("requires a repository");
 });
@@ -41,6 +41,38 @@ test("verification requires both architectures and matching revision labels", as
   };
   expect(await verifyRevision(run, "ref", commit, appRepository)).toBe(digest);
   await expect(verifyRevision(run, "ref", "wrong-sha", appRepository)).rejects.toThrow("does not match revision");
+});
+
+test("an app channel only moves when that channel's System supports the app", async () => {
+  const channelDigest = (channel: string, index: number) => `sha256:${channel === "stable" ? "5" : "7"}${index}${"0".repeat(62)}`;
+  const registry = (versions: { app: string; latest?: string; stable?: string }): Run => async (args) => {
+    const ref = args[4]!;
+    if (args.includes("{{json .Manifest}}")) {
+      const channel = ref.endsWith(":stable") ? "stable" : ref.endsWith(":latest") ? "latest" : undefined;
+      if (!channel) return ok(JSON.stringify(manifest));
+      if (versions[channel] === undefined) return { code: 1, stdout: "", stderr: "ERROR: manifest unknown" };
+      return ok(JSON.stringify({ digest: `sha256:${"9".repeat(64)}`, manifests: architectures.map((architecture, index) => ({ digest: channelDigest(channel, index), platform: { os: "linux", architecture } })) }));
+    }
+    const channel = (["latest", "stable"] as const).find((candidate) => architectures.some((_, index) => ref.endsWith(channelDigest(candidate, index))));
+    const labels = channel ? { "org.agents-in-the-cloud.system-version": versions[channel]! } : { "org.agents-in-the-cloud.required-system-version": versions.app };
+    return ok(JSON.stringify({ os: "linux", architecture: "amd64", config: { Labels: labels } }));
+  };
+  await assertChannelSystemsSupportApp(registry({ app: "2", latest: "2" }), digest, ["latest"], appRepository);
+  await assertChannelSystemsSupportApp(registry({ app: "1", latest: "3", stable: "1" }), digest, ["latest", "stable"], appRepository);
+  await expect(assertChannelSystemsSupportApp(registry({ app: "3", latest: "2" }), digest, ["latest"], appRepository)).rejects.toThrow("needs System version 3, but ghcr.io/lucasmeijer/agents-in-the-cloud-system:latest is version 2. Publish System first: images/system/publish.sh");
+  await expect(assertChannelSystemsSupportApp(registry({ app: "2", latest: "2", stable: "1" }), digest, ["latest", "stable"], appRepository)).rejects.toThrow("agents-in-the-cloud-system:stable is version 1. Publish System first: images/system/publish.sh --stable");
+  await expect(assertChannelSystemsSupportApp(registry({ app: "1", latest: "1" }), digest, ["latest", "stable"], appRepository)).rejects.toThrow("agents-in-the-cloud-system:stable isn't published, but stable installations need it. Publish System first: images/system/publish.sh --stable");
+});
+
+test("a fork app checks System in its own owner's repository", async () => {
+  const inspected: string[] = [];
+  const run: Run = async (args) => {
+    inspected.push(args[4]!);
+    if (args.includes("{{json .Manifest}}")) return args[4]!.includes("-system:") ? { code: 1, stdout: "", stderr: "ERROR: manifest unknown" } : ok(JSON.stringify(manifest));
+    return ok(JSON.stringify({ os: "linux", architecture: "amd64", config: { Labels: {} } }));
+  };
+  await expect(assertChannelSystemsSupportApp(run, digest, ["latest"], "ghcr.io/oerd/agents-in-the-cloud")).rejects.toThrow("ghcr.io/oerd/agents-in-the-cloud-system:latest isn't published");
+  expect(inspected.some((ref) => ref.includes("lucasmeijer"))).toBe(false);
 });
 
 test("promotion uses the verified digest and reports partial success", async () => {
@@ -74,11 +106,13 @@ test("promotion fails if registry readback differs", async () => {
   expect(current.channels.latest).toBe("failed");
 });
 
-async function scenario(options: { check?: boolean; exists?: boolean; moved?: boolean; buildFailure?: boolean; sameArch?: boolean; localArm?: boolean; badDriver?: boolean; missingHelper?: boolean; image?: string }) {
+async function scenario(options: { check?: boolean; exists?: boolean; moved?: boolean; buildFailure?: boolean; sameArch?: boolean; localArm?: boolean; badDriver?: boolean; missingHelper?: boolean; image?: string; stable?: boolean; failStable?: boolean; failNotesPublication?: boolean; prepare?: boolean; sourceRevision?: string; revision?: string; changedPaths?: string }) {
   const directory = mkdtempSync(join(tmpdir(), "agents-in-the-cloud-release-test-"));
   const calls: { args: string[]; cwd?: string }[] = [];
   let uploaded = options.exists ?? false;
-  const current = status();
+  const current = status(options.stable);
+  if (options.prepare) current.channels = {};
+  let githubRelease: { id: number; tag_name: string; target_commitish: string; body: string; draft: boolean } | undefined;
   current.digest = undefined;
   current.check = options.check ?? false;
   const oldHelper = process.env.ATELIER_RELEASE_HELPER;
@@ -89,8 +123,21 @@ async function scenario(options: { check?: boolean; exists?: boolean; moved?: bo
   try {
     const run: Run = async (args, command) => {
       calls.push({ args, cwd: command?.cwd });
-      if (args[0] === "git" && args[1] === "rev-parse") return ok(commit);
-      if (args[0] === "git" && args[1] === "ls-remote") return ok(`${options.moved ? "new-commit" : commit}\trefs/heads/main`);
+      if (args[0] === "git" && args[1] === "show") return ok("# Improvements\n\n## Bugfixes\n- Fixed a problem.");
+      if (args[0] === "gh") {
+        const method = args[args.indexOf("--method") + 1]!;
+        if (args[2]!.includes("git/ref/")) return githubRelease && !githubRelease.draft ? ok(JSON.stringify({ object: { type: "commit", sha: commit } })) : { code: 1, stdout: "", stderr: "HTTP 404" };
+        if (method === "GET") return ok(JSON.stringify(githubRelease ? [githubRelease] : []));
+        if (method === "PATCH" && options.failNotesPublication) throw new Error("notes publication failed");
+        // SAFETY: Release tooling supplies a JSON GitHub mutation with these fields.
+        const input = JSON.parse(command!.input!) as { tag_name: string; target_commitish: string; body: string; draft: boolean };
+        githubRelease = { id: 123, ...githubRelease, ...input };
+        return ok(JSON.stringify(githubRelease));
+      }
+      if (options.failStable && args.includes("create") && args.some(arg => arg.endsWith(":stable"))) throw new Error("stable promotion failed");
+      if (args[0] === "git" && args[1] === "rev-parse") return ok(options.sourceRevision ?? commit);
+      if (args[0] === "git" && args[1] === "diff") return ok(options.changedPaths ?? "");
+      if (args[0] === "git" && args[1] === "ls-remote") return ok(`${options.moved ? "new-commit" : options.sourceRevision ?? commit}\trefs/heads/main`);
       if (args.includes("context") && args.includes("show")) return ok("default");
       if (args.includes("{{json .}}")) {
         const local = args[args.indexOf("--context") + 1] === "default";
@@ -113,7 +160,11 @@ async function scenario(options: { check?: boolean; exists?: boolean; moved?: bo
       return ok();
     };
     let error: unknown;
-    try { await release({ check: current.check, stable: false, help: false, image: options.image ?? appRepository }, run, current, () => {}, directory); }
+    const releaseOptions = parseReleaseArgs([...(options.stable ? ["--stable", "--notes", "release_notes/2026-08-03-improvements.md"] : []), ...(options.image ? ["--image", options.image] : [])]);
+    releaseOptions.check = current.check;
+    releaseOptions.prepare = options.prepare ?? false;
+    if (options.revision) releaseOptions.revision = options.revision;
+    try { await release(releaseOptions, run, current, () => {}, directory); }
     catch (caught) { error = caught; }
     return { calls, current, error };
   } finally {
@@ -277,3 +328,66 @@ for (const options of [{ missingHelper: true }, { badDriver: true }]) {
     expect(calls.some(({ args }) => args.includes("login") || args.includes("--push"))).toBe(false);
   });
 }
+
+
+test("stable notes become public only after verified channel promotion", async () => {
+  const { calls, current, error } = await scenario({ stable: true });
+  expect(error).toBeUndefined();
+  expect(current.releaseNotes?.state).toBe("published");
+  const publish = calls.findIndex(({ args }) => args[0] === "gh" && args.includes("PATCH"));
+  const stable = calls.findIndex(({ args }) => args.includes("create") && args.some(arg => arg.endsWith(":stable")));
+  expect(publish).toBeGreaterThan(stable);
+});
+
+test("failed stable promotion leaves notes hidden and reports partial channel success", async () => {
+  const { calls, current, error } = await scenario({ stable: true, failStable: true });
+  expect(String(error)).toContain("stable promotion failed");
+  expect(current.channels).toEqual({ latest: "published", stable: "failed" });
+  expect(current.releaseNotes?.state).toBe("reserved");
+  expect(calls.some(({ args }) => args[0] === "gh" && args.includes("PATCH"))).toBe(false);
+});
+
+test("notes publication failure preserves the truthful channel status for retry", async () => {
+  const { current, error } = await scenario({ stable: true, failNotesPublication: true });
+  expect(String(error)).toContain("notes publication failed");
+  expect(current.channels).toEqual({ latest: "published", stable: "published" });
+  expect(current.releaseNotes?.state).toBe("reserved");
+  expect(current.state).not.toBe("published");
+});
+
+test("prepare uploads and verifies an image without promoting channels or reserving notes", async () => {
+  const { calls, current, error } = await scenario({ prepare: true, revision: commit });
+  expect(error).toBeUndefined();
+  expect(current.state).toBe("prepared");
+  expect(current.commit).toBe(commit);
+  expect(current.digest).toBe(digest);
+  expect(current.channels).toEqual({});
+  expect(calls.some(({ args }) => args[0] === "gh" || (args.includes("imagetools") && args.includes("create")))).toBe(false);
+  expect(calls.some(({ args }) => args[0] === "bun")).toBe(true);
+});
+
+test("notes-only commits do not rebuild or change the pinned code revision", async () => {
+  const notesRevision = "d".repeat(40);
+  const { calls, current, error } = await scenario({ stable: true, exists: true, revision: commit, sourceRevision: notesRevision, changedPaths: "release_notes/2026-08-03-improvements.md\n" });
+  expect(error).toBeUndefined();
+  expect(current.commit).toBe(commit);
+  expect(current.sourceRevision).toBe(notesRevision);
+  expect(current.releaseNotes?.state).toBe("published");
+  expect(calls.some(({ args }) => args[0] === "bun")).toBe(false);
+  expect(calls.find(({ args }) => args[0] === "git" && args[1] === "show")?.args[2]).toBe(`${notesRevision}:release_notes/2026-08-03-improvements.md`);
+  expect(calls.some(({ args }) => args[1] === "merge-base" && args[3] === commit && args[4] === notesRevision)).toBe(true);
+});
+
+test("new code after the prepared revision requires fresh preparation and notes review", async () => {
+  const { calls, error } = await scenario({ stable: true, exists: true, revision: commit, sourceRevision: "d".repeat(40), changedPaths: "packages/update/src/server/index.ts\nrelease_notes/2026-08-03-improvements.md\n" });
+  expect(String(error)).toContain("code changes after the pinned revision");
+  expect(calls.some(({ args }) => args[0] === "gh" || args[0] === "docker")).toBe(false);
+});
+
+test("prepare and pinned revision options reject ambiguous combinations", () => {
+  expect(parseReleaseArgs(["--prepare", "--revision", commit]).prepare).toBe(true);
+  expect(parseReleaseArgs(["--prepare", "--revision", commit]).revision).toBe(commit);
+  for (const args of [["--prepare", "--stable"], ["--prepare", "--check"], ["--prepare", "--notes", "release_notes/2026-08-03-improvements.md"]]) expect(() => parseReleaseArgs(args)).toThrow("builds only");
+  expect(() => parseReleaseArgs(["--revision", "short-sha"])).toThrow("full Git commit SHA");
+  expect(() => parseReleaseArgs(["--revision", commit, "--revision", commit])).toThrow("only once");
+});

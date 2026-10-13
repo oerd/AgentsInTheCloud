@@ -20,6 +20,12 @@ The renamed runtime is published separately with `images/patched-docker/publish.
 App, System and workspace images pin its multi-platform digest; commit updated
 pins before releasing.
 
+## App and System versions
+
+The app and System are released and updated separately. System reports its compatibility version (`systemVersion` in `packages/shared/src/system-version.ts`) in its `/status` response and as the `org.agents-in-the-cloud.system-version` image label. App images carry `org.agents-in-the-cloud.required-system-version`. The in-app updater won't install an app that needs a newer System and tells people to run the installer instead; System refuses to start such an app too. The installer updates System from the installation's Update channel (`agents-in-the-cloud-system:latest` or `:stable`), then moves the app to that channel's newest image.
+
+Publish System to a channel before any app that needs it: `images/system/publish.sh` moves `latest`, and `--stable` moves `stable` as well. `bun run release` refuses to move an app channel whose System is too old or not published yet.
+
 For the VM test, publish this branch's app and separately publish its System image
 as `ghcr.io/lucasmeijer/agents-in-the-cloud-system:latest` (`images/system/publish.sh --image ghcr.io/example/agents-in-the-cloud-system` selects a fork target and moves its latest tag); this release command
 publishes only the app and its workspace dependency. Use the branch's installer

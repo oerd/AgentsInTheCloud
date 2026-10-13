@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { blockedEgressIpv4Ranges, blockedEgressIpv6Ranges, isWorkspaceEgressAddress, workspaceEgressNftIpv4Elements } from "./egress-policy.ts";
+import { blockedEgressIpv4Ranges, blockedEgressIpv6Ranges, isPrivateNetworkAddress, isWorkspaceEgressAddress, workspaceEgressNftIpv4Elements } from "./egress-policy.ts";
 
 test("public internet addresses are the only allowed egress destinations", () => {
   for (const ip of ["93.184.215.14", "8.8.8.8", "1.1.1.1", "2606:4700:10::6814:179a", "2001:4860:4860::8888"]) {
@@ -24,4 +24,12 @@ test("the nft element list matches the checked ranges", () => {
   const elements = workspaceEgressNftIpv4Elements().split(",").map(element => element.trim());
   expect(elements).toEqual(blockedEgressIpv4Ranges.map(([address, prefix]) => `${address}/${prefix}`));
   expect(blockedEgressIpv6Ranges).toEqual([["2001:db8::", 32]]);
+});
+
+test("private network access may only open LAN, VPN and tailnet addresses", () => {
+  for (const ip of ["10.0.0.1", "10.255.255.255", "100.64.0.1", "100.100.100.100", "192.168.1.1", "fd00::1", "fd7a:115c:a1e0::1", "fc00::1"])
+    expect(isPrivateNetworkAddress(ip), ip).toBe(true);
+  // Docker networks, the System host, cloud metadata and the public internet stay out of reach.
+  for (const ip of ["172.16.0.1", "172.17.0.1", "172.31.255.255", "127.0.0.1", "169.254.169.254", "0.0.0.0", "224.0.0.1", "8.8.8.8", "::1", "fe80::1", "::ffff:10.0.0.1", "2001:4860:4860::8888", "db.internal", ""])
+    expect(isPrivateNetworkAddress(ip), ip).toBe(false);
 });

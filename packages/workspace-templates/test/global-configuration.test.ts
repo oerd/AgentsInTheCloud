@@ -13,7 +13,7 @@ describe("Global workspace settings", () => {
   test("load files saved before global settings existed", async () => {
     const { file } = await store();
     await writeFile(file, JSON.stringify({ projects: [] }));
-    expect(await getConfiguration(globalWorkspaceConfiguration, file)).toEqual({ environment: [], secrets: [], sshKeys: [], sshKnownHosts: "" });
+    expect(await getConfiguration(globalWorkspaceConfiguration, file)).toEqual({ environment: [], secrets: [], sshKeys: [], sshKnownHosts: "", privateNetworkAccess: [] });
   });
 
   test("a template's own secret replaces a global secret with the same name", async () => {

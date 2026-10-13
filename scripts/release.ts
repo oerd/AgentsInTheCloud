@@ -3,53 +3,79 @@ import { appendFileSync, mkdirSync, renameSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { Type } from "typebox";
 import { Value } from "typebox/value";
-import { ownerFromRepository, upstreamImageRepository } from "../packages/core/src/ghcr.ts";
-import { authenticateRegistry, commandRunner, ensureBuilders, inspectImage, inspectPlatform, platforms, type Run } from "./release-support.ts";
+import { imageRepository, ownerFromRepository, upstreamImageRepository } from "../packages/core/src/ghcr.ts";
+import { authenticateRegistry, commandRunner, ensureBuilders, inspectImage, inspectPlatform, platformLabels, platforms, type Run } from "./release-support.ts";
+import { prepareReleaseNotes, publishReleaseNotes, readReleaseNotes } from "./release-notes.ts";
+import { releaseNotesRepository } from "../packages/update/src/server/release-history.ts";
+import { parseSystemVersion, requiredSystemVersionLabel, systemVersionLabel } from "../packages/shared/src/system-version.ts";
 import { acquireReleaseLock } from "./release-lock.ts";
 
 const root = resolve(import.meta.dir, "..");
 export const usage = `Release AgentsInTheCloud from the current origin/main commit.
 
   bun run release             Publish latest
-  bun run release --stable    Publish latest and stable
+  bun run release --stable --notes release_notes/YYYY-MM-DD-description.md
+                              Publish latest and stable with handwritten notes
+  bun run release --prepare   Build and verify without updating either channel
+  bun run release --stable --revision <full-sha> --notes release_notes/YYYY-MM-DD-description.md
+                              Publish a prepared revision with approved notes from origin/main
   bun run release --check     Check Git, local/SSH Docker builders and both architectures; publish nothing
 
 --image <repository> publishes to an explicit app repository (default: ghcr.io/lucasmeijer/agents-in-the-cloud).
+  System is checked in the same owner's agents-in-the-cloud-system repository.
 --check may be combined with --stable. Working files are never released or reset.
 Requires ATELIER_RELEASE_HELPER=[user@]hostname with noninteractive SSH and Docker access.
-Uses the existing GH_PACKAGE_TOKEN for publishing. Logs/status live under Git's
+Uses the existing GH_PACKAGE_TOKEN for images and gh CLI authentication for GitHub Releases.
+Logs/status live under Git's
 common directory in agents-in-the-cloud-releases/<run-id>/. See docs/releases.md.
 `;
 
+interface ReleaseOptions { stable: boolean; check: boolean; help: boolean; notes?: string; revision?: string; prepare: boolean; image: string; }
+
 export function parseReleaseArgs(args: string[]) {
   let image: string = upstreamImageRepository("app");
+  let notes: string | undefined;
+  let revision: string | undefined;
   for (let index = 0; index < args.length; index++) {
     const arg = args[index]!;
-    if (["--stable", "--check", "--help", "-h"].includes(arg)) continue;
     if (arg === "--image") {
       const value = args[++index];
       if (!value || value.startsWith("--")) throw new Error("--image requires a repository");
       image = value;
-      continue;
-    }
-    throw new Error(`Unknown release option: ${arg}`);
+    } else if (arg === "--notes") {
+      if (notes !== undefined) throw new Error("Supply --notes only once");
+      notes = args[++index];
+      if (!notes || notes.startsWith("--")) throw new Error("--notes needs a file path");
+    } else if (arg === "--revision") {
+      if (revision !== undefined) throw new Error("Supply --revision only once");
+      revision = args[++index];
+      if (!revision || !/^[a-f0-9]{40}$/.test(revision)) throw new Error("--revision needs a full Git commit SHA");
+    } else if (!["--prepare", "--stable", "--check", "--help", "-h"].includes(arg)) throw new Error(`Unknown release option: ${arg}`);
   }
-  return { stable: args.includes("--stable"), check: args.includes("--check"), help: args.includes("--help") || args.includes("-h"), image };
+  const options: ReleaseOptions = { prepare: args.includes("--prepare"), stable: args.includes("--stable"), check: args.includes("--check"), help: args.includes("--help") || args.includes("-h"), image };
+  if (revision !== undefined) options.revision = revision;
+  if (notes !== undefined) options.notes = notes;
+  if (options.prepare && (options.stable || options.check || notes)) throw new Error("--prepare builds only; do not combine it with --stable, --check or --notes");
+  if (!options.help && options.stable && !options.check && !notes) throw new Error("Stable releases require --notes release_notes/YYYY-MM-DD-description.md");
+  if (notes && !options.stable) throw new Error("--notes is only used with --stable");
+  return options;
 }
 
 type ChannelState = "pending" | "promoting" | "published" | "failed";
 export interface ReleaseStatus {
-  state: "running" | "checked" | "published" | "failed";
+  state: "running" | "prepared" | "checked" | "published" | "failed";
   phase: string;
   startedAt: string;
   updatedAt: string;
   elapsedSeconds: number;
   check: boolean;
+  sourceRevision?: string;
   commit?: string;
   builder?: string;
   digest?: string;
   channels: Partial<Record<"latest" | "stable", ChannelState>>;
   error?: string;
+  releaseNotes?: { id: string; path: string; state: "pending" | "reserved" | "published" };
 }
 const preloadSchema = Type.Array(Type.String({ pattern: "@sha256:[a-f0-9]{64}$" }), { minItems: 1 });
 
@@ -67,6 +93,20 @@ export async function verifyRevision(run: Run, ref: string, commit: string, imag
   }
   for (const dependency of dependencies) await inspectImage(run, dependency);
   return manifest.digest;
+}
+
+/** Installations get System from their app's channel, so each channel's System must already support the app. */
+export async function assertChannelSystemsSupportApp(run: Run, appDigest: string, channels: readonly ("latest" | "stable")[], image: string): Promise<void> {
+  const systemImage = imageRepository(ownerFromRepository(image), "system");
+  const app = (await inspectImage(run, `${image}@${appDigest}`))!;
+  const required = Math.max(...(await platformLabels(run, image, app)).map((labels) => parseSystemVersion(labels[requiredSystemVersionLabel])));
+  for (const channel of channels) {
+    const system = await inspectImage(run, `${systemImage}:${channel}`, true);
+    const publish = `images/system/publish.sh${channel === "stable" ? " --stable" : ""}`;
+    if (!system) throw new Error(`${systemImage}:${channel} isn't published, but ${channel} installations need it. Publish System first: ${publish}`);
+    const version = Math.min(...(await platformLabels(run, systemImage, system)).map((labels) => parseSystemVersion(labels[systemVersionLabel])));
+    if (version < required) throw new Error(`This app needs System version ${required}, but ${systemImage}:${channel} is version ${version}. Publish System first: ${publish}`);
+  }
 }
 
 export async function promoteChannels(run: Run, status: ReleaseStatus, save: () => void, image: string): Promise<void> {
@@ -96,8 +136,26 @@ export async function release(options: ReturnType<typeof parseReleaseArgs>, run:
   await run(["git", "fetch", "origin", "refs/heads/main"]);
   const image = options.image;
   const owner = ownerFromRepository(image);
-  status.commit = (await run(["git", "rev-parse", "FETCH_HEAD^{commit}"])).stdout.trim();
+  const sourceRevision = (await run(["git", "rev-parse", "FETCH_HEAD^{commit}"])).stdout.trim();
+  status.sourceRevision = sourceRevision;
+  status.commit = options.revision ?? sourceRevision;
+  if (options.revision && options.revision !== sourceRevision) {
+    await run(["git", "merge-base", "--is-ancestor", options.revision, sourceRevision]);
+    const changes = (await run(["git", "diff", "--name-only", options.revision, sourceRevision])).stdout.trim().split("\n").filter(Boolean);
+    if (changes.some(path => !path.startsWith("release_notes/"))) throw new Error("origin/main has code changes after the pinned revision. Prepare the new code and review its release notes before publishing.");
+  }
   save();
+  const notes = options.notes ? await readReleaseNotes(run, sourceRevision, options.notes) : undefined;
+  if (notes) {
+    status.releaseNotes = { id: notes.id, path: notes.path, state: "pending" };
+    save();
+    if (!options.check) {
+      phase("Reserve stable release notes on GitHub");
+      await prepareReleaseNotes(run, notes, status.commit, releaseNotesRepository(image));
+      status.releaseNotes.state = "reserved";
+      save();
+    }
+  }
   phase("Check local and SSH native builders");
   const builders = await ensureBuilders(run, directory);
   status.builder = `${builders.local} + ${builders.remote}`;
@@ -126,10 +184,24 @@ export async function release(options: ReturnType<typeof parseReleaseArgs>, run:
   phase("Verify both architectures and revision labels");
   status.digest = await verifyRevision(run, ref, status.commit, image);
   save();
+  if (options.prepare) {
+    status.state = "prepared";
+    phase(`Prepared ${status.commit} — ${status.digest}. No channels or release notes published.`);
+    return;
+  }
+  // Avoid promoting a build that was overtaken by new main branch commits while building.
   phase("Confirm main branch has not moved");
   const head = (await run(["git", "ls-remote", "origin", "refs/heads/main"])).stdout.split(/\s+/)[0];
-  if (head !== status.commit) throw new Error("origin/main moved during this release. Commit image is uploaded; rerun to release the new branch head.");
+  if (head !== sourceRevision) throw new Error("origin/main moved during this release. Commit image is uploaded; inspect the new changes and reserved notes before retrying. Do not silently change the approved code revision.");
+  phase("Check each channel's System supports this app");
+  await assertChannelSystemsSupportApp(run, status.digest, options.stable ? ["latest", "stable"] : ["latest"], image);
   await promoteChannels(run, status, save, image);
+  if (notes) {
+    phase("Publish stable release notes on GitHub");
+    await publishReleaseNotes(run, notes, status.commit, status.digest, releaseNotesRepository(image));
+    status.releaseNotes!.state = "published";
+    save();
+  }
   status.state = "published";
   phase(`Published ${Object.keys(status.channels).join(" + ")} — ${status.digest}`);
 }
@@ -142,7 +214,7 @@ async function main(options: ReturnType<typeof parseReleaseArgs>, common: string
   const started = Date.now();
   const status: ReleaseStatus = {
     state: "running", phase: "Starting", startedAt: new Date(started).toISOString(), updatedAt: new Date(started).toISOString(), elapsedSeconds: 0,
-    check: options.check, channels: options.stable ? { latest: "pending", stable: "pending" } : { latest: "pending" },
+    check: options.check, channels: options.prepare ? {} : options.stable ? { latest: "pending", stable: "pending" } : { latest: "pending" },
   };
   const output = (text: string) => { process.stdout.write(text); appendFileSync(logPath, text); };
   let lastPhase = "";

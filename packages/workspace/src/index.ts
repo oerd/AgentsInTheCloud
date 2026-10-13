@@ -57,7 +57,7 @@ export function generateWorkspaceId(): string { return crypto.randomUUID().repla
 export function workspaceContainerName(id: string): string { return `agents-in-the-cloud-${id}`; }
 
 function workspaceNetworkName(id: string): string { return `agents-in-the-cloud-workspace-${id}`; }
-function workspaceBridgeName(id: string): string { return `atw-${createHash("sha256").update(id).digest("hex").slice(0, 11)}`; }
+export function workspaceBridgeName(id: string): string { return `atw-${createHash("sha256").update(id).digest("hex").slice(0, 11)}`; }
 function formatDeleteBlockedMessage(id: string, issues: JsonObject[]): string { return `workspace ${id} has delete blockers:\n${issues.map((issue) => `- ${JSON.stringify(issue)}`).join("\n")}\nuse --force to delete anyway`; }
 
 async function createWorkspaceWorkDir(id: string): Promise<{ worktreePath: string; dockerHostWorktreePath: string }> {

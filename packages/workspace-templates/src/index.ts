@@ -66,6 +66,7 @@ export {
   cachedWorkspaceTemplateSourcePath,
 } from "./workspace-source.ts";
 
+export { effectivePrivateNetworkAccess, formatPrivateNetworkDestination, requestedPrivateNetworkDestination, setPrivateNetworkAccess, type PrivateNetworkDestination } from "./private-network.ts";
 export { getWorkspaceTemplateSshKnownHosts, setWorkspaceTemplateSshKnownHosts } from "./ssh-host-trust.ts";
 export { sshHostTrustFailure, scanSshHost, trustScannedSshHost } from "./ssh-trust-recovery.ts";
 export { onWorkspaceSshTrustChanged, workspaceSshTrustRequests, requestWorkspaceSshTrust, decideWorkspaceSshTrust, cancelWorkspaceSshTrust } from "./ssh-trust-broker.ts";

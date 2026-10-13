@@ -17,7 +17,7 @@ function fakePi() {
   const executions: unknown[][] = [];
   const notices: string[] = [];
   let active: string[] = [];
-  const partial: Pick<ExtensionAPI, "on" | "registerMcpServer" | "getMcpServers" | "registerCommand" | "registerTool" | "getAllTools" | "getActiveTools" | "setActiveTools" | "exec"> = {
+  const partial: Pick<ExtensionAPI, "on" | "registerMcpServer" | "getMcpServers" | "registerCommand" | "registerTool" | "registerToolRenderer" | "getAllTools" | "getActiveTools" | "setActiveTools" | "exec"> = {
     on(name: string, handler: FakeHandler) {
       handlers.set(name, [...(handlers.get(name) ?? []), handler]);
       return () => { handlers.set(name, handlers.get(name)!.filter((entry) => entry !== handler)); };
@@ -25,6 +25,7 @@ function fakePi() {
     registerMcpServer(name: string, config: McpServerConfig) { servers.set(name, config); },
     getMcpServers() { return [...servers].map(([name, config]) => ({ name, config, extensionPath: "pi-agents-in-the-cloud" })); },
     registerCommand() {},
+    registerToolRenderer() {},
     registerTool(tool: ToolDefinition<any, any>) { tools.set(tool.name, tool); },
     getAllTools(): ToolInfo[] { return [...tools.values()].map((tool) => ({ ...tool, exposure: tool.exposure ?? "direct", sourceInfo: { source: "extension", path: "pi-agents-in-the-cloud", scope: "temporary", origin: "top-level" } })); },
     getActiveTools() { return active; },
@@ -100,7 +101,7 @@ test("Pi native MCP discovers AgentsInTheCloud tools and does not duplicate nati
   expect([...f.tools.keys()].filter((name) => name.startsWith("mcp__"))).toEqual(["mcp__agents_in_the_cloud__present", "mcp__agents_in_the_cloud__fail"]);
   const present = f.tools.get("mcp__agents_in_the_cloud__present")!;
   expect(present.exposure).toBe("deferred");
-  expect(present.namespace).toEqual({ name: "mcp__agents_in_the_cloud", instructions: undefined });
+  expect(present.namespace).toEqual({ name: "mcp__agents_in_the_cloud", aliases: ["agents-in-the-cloud"] });
   const updates: string[] = [];
   const result = await present.execute("call", { kind: "browser" }, undefined, (update) => {
     updates.push(update.content[0]!.type === "text" ? update.content[0]!.text : "image");

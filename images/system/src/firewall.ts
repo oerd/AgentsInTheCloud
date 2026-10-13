@@ -1,5 +1,6 @@
 import { isIP } from "node:net";
-import { allowedEgressIpv6Range, blockedEgressIpv6Ranges, workspaceEgressNftIpv4Elements } from "../../../packages/shared/src/egress-policy.ts";
+import { allowedEgressIpv6Range, blockedEgressIpv6Ranges, isPrivateNetworkAddress, workspaceEgressNftIpv4Elements } from "../../../packages/shared/src/egress-policy.ts";
+import type { PrivateNetworkFirewallEntry } from "../../../packages/host/src/protocol.ts";
 
 /** Every bridge-attached workload shares the destination policy. Host-side build
  * clients also use it when NFT_SOCKET is available. Management sockets are
@@ -20,6 +21,9 @@ table inet agents-in-the-cloud_workspaces {
   set non_public_v4 {
     type ipv4_addr; flags interval;
     elements = { ${workspaceEgressNftIpv4Elements()} }
+  }
+  set private_network_v4 {
+    type ifname . ipv4_addr . inet_service;
   }
   chain public_egress {
 ${dnsRules.join("\n")}
@@ -43,9 +47,11 @@ ${protectBuildClients ? `    ${selector} jump public_egress` : ""}
   chain forward {
     type filter hook forward priority -10; policy accept;
     meta iifkind "bridge" meta oifkind "bridge" counter drop
+    meta iifkind "bridge" meta l4proto tcp iifname . ip daddr . tcp dport @private_network_v4 counter accept
     meta iifkind "bridge" jump public_destinations
   }
 }
+flush set inet agents-in-the-cloud_workspaces private_network_v4
 ${(["ip", "ip6"] as const).map(family => `add table ${family} agents-in-the-cloud_workspaces
 flush table ${family} agents-in-the-cloud_workspaces
 table ${family} agents-in-the-cloud_workspaces {
@@ -63,6 +69,20 @@ ${dnsRules.filter(rule => rule.startsWith(`    ${family} `)).join("\n")}
   }
 ` : ""}}
 `).join("")}`;
+}
+
+/** Atomically replaces every workspace's private network destinations. Only
+ * the forward chain consults them, so the System host itself stays unreachable
+ * through the family tables' local-address drop. */
+export function privateNetworkAccessRules(destinations: readonly PrivateNetworkFirewallEntry[]): string {
+  for (const { bridge, address, port } of destinations) {
+    if (!/^atw-[a-f0-9]{11}$/.test(bridge)) throw new Error(`Invalid workspace bridge: ${bridge}`);
+    if (isIP(address) !== 4 || !isPrivateNetworkAddress(address)) throw new Error(`Not a private network address: ${address}`);
+    if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error(`Invalid port: ${port}`);
+  }
+  const elements = [...new Set(destinations.map(({ bridge, address, port }) => `"${bridge}" . ${address} . ${port}`))];
+  return `flush set inet agents-in-the-cloud_workspaces private_network_v4
+${elements.length ? `add element inet agents-in-the-cloud_workspaces private_network_v4 { ${elements.join(", ")} }\n` : ""}`;
 }
 
 /** Private DNS is allowed only at configured resolvers on TCP/UDP port 53. */
@@ -108,4 +128,10 @@ export async function installWorkspaceFirewall(buildClientsCgroup: string, names
   const result = await nft(workspaceFirewallRules(buildClientsCgroup, nameservers, protectBuildClients));
   if (result.code !== 0)
     throw new Error(`Could not install workspace firewall: ${result.diagnostic}`);
+}
+
+export async function setPrivateNetworkAccess(destinations: readonly PrivateNetworkFirewallEntry[]) {
+  const result = await nft(privateNetworkAccessRules(destinations));
+  if (result.code !== 0)
+    throw new Error(`Could not update private network access: ${result.diagnostic}`);
 }

@@ -12,7 +12,8 @@
     "@agents-in-the-cloud/shared": "workspace:*",
     "@agents-in-the-cloud/workspace": "workspace:*",
     "https-proxy-agent": "7.0.6",
-    "proxy-from-env": "1.1.0"
+    "proxy-from-env": "1.1.0",
+    "@agents-in-the-cloud/host": "workspace:*"
   },
   "devDependencies": {
     "@types/proxy-from-env": "1.0.3"

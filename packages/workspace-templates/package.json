@@ -11,6 +11,7 @@
     "@agents-in-the-cloud/core": "workspace:*",
     "@agents-in-the-cloud/observable-terminal": "workspace:*",
     "@agents-in-the-cloud/workspace": "workspace:*",
-    "typebox": "^1.0.57"
+    "typebox": "^1.0.57",
+    "@agents-in-the-cloud/shared": "workspace:*"
   }
 }

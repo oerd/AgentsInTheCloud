@@ -1,9 +1,10 @@
 import { expect, test } from "bun:test";
-import { resolverAddresses, workspaceFirewallRules } from "./firewall.ts";
+import { privateNetworkAccessRules, resolverAddresses, workspaceFirewallRules } from "./firewall.ts";
 
 test("all bridge kinds share the input and forwarding boundary, independent of names", () => {
   const rules = workspaceFirewallRules("/system/workloads/build-clients", ["127.0.0.53"]);
-  expect(rules).not.toContain("iifname");
+  // Only the private network access set is keyed by a workspace's bridge name.
+  expect(rules).not.toContain('iifname "');
   expect(rules).not.toContain("oifname");
   expect(rules).toContain('meta iifkind "bridge" counter drop');
   expect(rules).toContain('meta iifkind "bridge" meta oifkind "bridge" counter drop');
@@ -79,4 +80,42 @@ test("without NFT_SOCKET only host-side client filtering is omitted", () => {
   expect(rules).toContain('meta iifkind "bridge" meta oifkind "bridge" counter drop');
   expect(rules).toContain('meta iifkind "bridge" jump public_destinations');
   expect(rules).toContain("ip daddr @non_public_v4 counter drop");
+});
+
+test("private network destinations are opened per workspace bridge, before the public-only boundary", () => {
+  const rules = workspaceFirewallRules("/system/workloads/build-clients", ["127.0.0.53"]);
+  const forward = rules.slice(rules.indexOf("  chain forward"));
+  const allow = 'meta iifkind "bridge" meta l4proto tcp iifname . ip daddr . tcp dport @private_network_v4 counter accept';
+  expect(rules).toContain("type ifname . ipv4_addr . inet_service;");
+  // Flushing a table keeps set elements: reinstalling starts without destinations until the app replaces them.
+  expect(rules).toContain("}\nflush set inet agents-in-the-cloud_workspaces private_network_v4\n");
+  expect(forward.indexOf('meta iifkind "bridge" meta oifkind "bridge" counter drop')).toBeLessThan(forward.indexOf(allow));
+  expect(forward.indexOf(allow)).toBeLessThan(forward.indexOf('meta iifkind "bridge" jump public_destinations'));
+  // System's own addresses are dropped by the earlier family tables, whatever the set holds.
+  for (const family of ["ip", "ip6"]) {
+    const table = rules.slice(rules.indexOf(`table ${family} agents-in-the-cloud_workspaces {`));
+    expect(table).toContain("type filter hook forward priority -11");
+    expect(table).toContain('meta iifkind "bridge" fib daddr type local counter drop');
+  }
+});
+
+test("private network access replaces every destination in one batch", () => {
+  expect(privateNetworkAccessRules([
+    { bridge: "atw-0123456789a", address: "10.1.2.3", port: 5432 },
+    { bridge: "atw-0123456789a", address: "10.1.2.3", port: 5432 },
+    { bridge: "atw-bbbbbbbbbbb", address: "192.168.1.20", port: 443 },
+  ])).toBe(`flush set inet agents-in-the-cloud_workspaces private_network_v4
+add element inet agents-in-the-cloud_workspaces private_network_v4 { "atw-0123456789a" . 10.1.2.3 . 5432, "atw-bbbbbbbbbbb" . 192.168.1.20 . 443 }
+`);
+  expect(privateNetworkAccessRules([])).toBe("flush set inet agents-in-the-cloud_workspaces private_network_v4\n");
+});
+
+test("private network access rejects anything but private IPv4 destinations on workspace bridges", () => {
+  const valid = { bridge: "atw-0123456789a", address: "10.1.2.3", port: 22 };
+  for (const address of ["172.17.0.1", "127.0.0.1", "169.254.169.254", "8.8.8.8", "fd00::1", "db.internal", "10.0.0.1 } ; flush ruleset"])
+    expect(() => privateNetworkAccessRules([{ ...valid, address }]), address).toThrow("Not a private network address");
+  for (const bridge of ["docker0", "atw-test1", 'atw-0123456789a" . 10.0.0.1'])
+    expect(() => privateNetworkAccessRules([{ ...valid, bridge }]), bridge).toThrow("Invalid workspace bridge");
+  for (const port of [0, 65536, 1.5])
+    expect(() => privateNetworkAccessRules([{ ...valid, port }])).toThrow("Invalid port");
 });

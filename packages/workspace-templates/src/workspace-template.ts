@@ -7,7 +7,7 @@ import { Type, type Static } from "typebox";
 import { Value } from "typebox/value";
 import type { WorkspaceInitInstruction } from "@agents-in-the-cloud/workspace";
 
-export type WorkspaceTemplateSummary = Omit<WorkspaceTemplateRecord, "secrets" | "sshKeys" | "sshKnownHosts" | "environment"> & {
+export type WorkspaceTemplateSummary = Omit<WorkspaceTemplateRecord, "secrets" | "sshKeys" | "sshKnownHosts" | "environment" | "privateNetworkAccess"> & {
   configurationFingerprint?: string;
   /** Adding a template counts as using it, as does creating a workspace from it. */
   lastUsedAt?: number;
@@ -20,7 +20,7 @@ export type WorkspaceTemplateSshKeySummary = Omit<StoredWorkspaceTemplateSshKey,
 export type StoredWorkspaceTemplateEnvironmentVariable = Static<typeof workspaceTemplateEnvironmentVariableSchema>;
 export type WorkspaceTemplateEnvironmentVariable = Omit<StoredWorkspaceTemplateEnvironmentVariable, "projectId"> & { workspaceTemplateId?: string };
 export type WorkspaceTemplateRecord = Static<typeof workspaceTemplateRecordSchema>;
-/** Records that own Secrets, SSH keys, trusted SSH servers and Environment variables. */
+/** Records that own Secrets, SSH keys, trusted SSH servers, Environment variables and Private network access. */
 export type ConfigurationRecord = Static<typeof configurationRecordSchema>;
 export type WorkspaceTemplateStore = { workspaceTemplates: WorkspaceTemplateRecord[]; global: ConfigurationRecord };
 
@@ -83,6 +83,8 @@ const configurationProperties = {
   sshKeys: Type.Optional(Type.Array(storedWorkspaceTemplateSshKeySchema)),
   sshKnownHosts: Type.Optional(Type.String()),
   environment: Type.Optional(Type.Array(workspaceTemplateEnvironmentVariableSchema)),
+  /** Canonical `host:port` entries; absent in files saved before Private network access existed. */
+  privateNetworkAccess: Type.Optional(Type.Array(Type.String())),
 };
 
 const configurationRecordSchema = Type.Object(configurationProperties);
@@ -318,9 +320,10 @@ export interface ScopeConfiguration {
   secrets: WorkspaceTemplateSecretSummary[];
   sshKeys: WorkspaceTemplateSshKeySummary[];
   sshKnownHosts: string;
+  privateNetworkAccess: string[];
 }
 
-/** Non-sensitive Secrets, SSH keys, trusted SSH servers and Environment variables of a template or the global workspace settings. */
+/** Non-sensitive Secrets, SSH keys, trusted SSH servers, Environment variables and Private network access of a template or the global workspace settings. */
 export async function getConfiguration(scope: ConfigurationScope, file = workspaceTemplatesFile()): Promise<ScopeConfiguration> {
   const configuration = findConfigurationRecord(await readWorkspaceTemplateStore(file), scope);
   return {
@@ -328,6 +331,7 @@ export async function getConfiguration(scope: ConfigurationScope, file = workspa
     secrets: workspaceTemplateSecretSummaries(configuration),
     sshKeys: (configuration.sshKeys ?? []).map(workspaceTemplateSshKeySummary),
     sshKnownHosts: configuration.sshKnownHosts ?? "",
+    privateNetworkAccess: configuration.privateNetworkAccess ?? [],
   };
 }
 

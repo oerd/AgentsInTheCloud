@@ -26,7 +26,19 @@ Two layers enforce the same policy, generated from one definition in `packages/s
 - The System nftables table (`images/system/src/firewall.ts`) drops workspace-bridge traffic to every special-purpose range: RFC1918, CGNAT/tailnet, loopback, link-local, multicast, documentation ranges, and non-global IPv6. It also isolates the System itself (input chain), peer workspaces, and workspace-to-workspace forwarding. This is the real boundary: it applies to every packet, not only to traffic that respects `HTTP(S)_PROXY`.
 - The workspace egress proxy (`packages/proxy-egress`) applies the same address policy to proxied HTTP, CONNECT and WebSocket traffic, resolves each hostname **once**, and connects to the address it checked. For direct connections, the routed hostname survives in the `Host` header and TLS `serverName`, so virtual hosting, SNI and certificate verification are unaffected. DNS cannot change the destination between the policy check and the connection. When an environment-configured upstream proxy is used (including a nested installation’s parent proxy), it is a trusted egress boundary: requests and CONNECT keep their logical hostname for credential hooks, and that proxy owns destination resolution, policy enforcement and outbound pinning. Only configure upstream proxies you trust to enforce this boundary.
 
-Private destinations (LAN, VPN, tailnet, Docker bridges) were briefly allowed and are closed again: nothing in the codebase depended on it, and it exposed every unauthenticated AgentsInTheCloud instance on the same networks. When a workspace legitimately needs an internal host, allow that exact host through the proxy's hook layer rather than reopening a range.
+Private destinations (LAN, VPN, tailnet, Docker bridges) were briefly allowed and are closed again: nothing in the codebase depended on it, and it exposed every unauthenticated AgentsInTheCloud instance on the same networks.
+
+### Private network access
+
+Users list exact `host:port` destinations under **Private network access**, globally or per template (stored as `privateNetworkAccess` in the template store). A workspace gets the global entries plus its template's own, and changes apply to running workspaces. Hostnames are allowed; there are no ranges or wildcards.
+
+- The egress proxy allows a private address only when the requested hostname and port are listed. It still resolves once and pins the address. A blocked private destination returns a 403 that tells the agent which `host:port` to add.
+- On System, the app resolves listed hostnames (IPv4) and replaces the firewall's per-bridge entries whenever settings or workspaces change, and every minute so DNS changes are followed. Firewall entries are IP-based, so anything served on that address and port is reachable.
+- Without System (development, nested installations) only the proxy applies.
+
+Listed destinations can only open addresses in `10.0.0.0/8`, `100.64.0.0/10` (CGNAT/tailnet) and `192.168.0.0/16`, plus `fc00::/7` through the proxy. `172.16.0.0/12` is never opened because System allocates every Docker network from it. Loopback, link-local (cloud metadata) and the System host itself stay unreachable.
+
+In the firewall, the `private_network_v4` set holds `bridge . address . port` elements. A forward rule accepts TCP that matches it, after the bridge-to-bridge drop and before `public_destinations`. The family tables' earlier local-address drop and the input chain still stop listed System addresses. Installing the firewall starts with an empty set (flushing a table keeps set elements). The app replaces the whole set atomically through the System host socket's `private-network-access` operation; System validates every bridge name, address and port before interpolating it into nftables.
 
 ### Docker Desktop firewall compatibility
 

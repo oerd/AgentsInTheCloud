@@ -37,6 +37,7 @@
     "@agents-in-the-cloud/codex-cli-agent": "workspace:*",
     "@agents-in-the-cloud/cursor-agent": "workspace:*",
     "@agents-in-the-cloud/claude-agent": "workspace:*",
+    "@agents-in-the-cloud/claude-cli-agent": "workspace:*",
     "@agents-in-the-cloud/cli-agent": "workspace:*",
     "@agents-in-the-cloud/pi-agent": "workspace:*",
     "@agents-in-the-cloud/inline-content": "workspace:*",
