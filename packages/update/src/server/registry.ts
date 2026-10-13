@@ -1,11 +1,13 @@
 import { requireGhcrRepository } from "@agents-in-the-cloud/core/ghcr";
 import { type UpdateChannel } from "./update-channel.ts";
+import { parseSystemVersion, requiredSystemVersionLabel } from "@agents-in-the-cloud/shared/system-version";
 import { Type, type Static } from "typebox";
 import { Value } from "typebox/value";
 
 export type HttpFetcher = (input: string | URL, init?: RequestInit) => Promise<Response>;
 
-export interface ImageMetadata { digest: string; revision?: string; }
+/** requiredSystemVersion is 0 for images from before System versions existed. */
+export interface ImageMetadata { digest: string; revision?: string; requiredSystemVersion: number }
 
 interface RegistryAuth { realm: string; service?: string; scope?: string }
 
@@ -115,7 +117,7 @@ async function fetchRegistryImage(base: string, version: string, fetcher: HttpFe
 export async function fetchChannelImageMetadata(repository: string, channel: UpdateChannel, fetcher: HttpFetcher = fetch, platform = { os: "linux", architecture: currentArch() }): Promise<ImageMetadata> {
   const path = requireGhcrRepository(repository).slice("ghcr.io/".length);
   const image = await fetchRegistryImage(`https://ghcr.io/v2/${path}`, channel, fetcher, platform);
-  return { digest: image.digest, revision: image.labels["org.opencontainers.image.revision"] };
+  return { digest: image.digest, revision: image.labels["org.opencontainers.image.revision"], requiredSystemVersion: parseSystemVersion(image.labels[requiredSystemVersionLabel]) };
 }
 
 const imageReferenceSchema = Type.String({ pattern: "^[a-zA-Z0-9][a-zA-Z0-9._/:@-]*$" });

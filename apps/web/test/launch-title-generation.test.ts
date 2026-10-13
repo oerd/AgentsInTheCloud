@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import * as agent from "@agents-in-the-cloud/builtin-agent/server";
 import { agentsInTheCloudServerModule as codexCliModule } from "@agents-in-the-cloud/codex-cli-agent/server";
 import { agentsInTheCloudServerModule as codexModule } from "@agents-in-the-cloud/codex-agent/server";
+import { agentsInTheCloudServerModule as claudeModule } from "@agents-in-the-cloud/claude-agent/server";
 import { createTestApp, deferred, postJson, temporaryAgentsInTheCloudDataDir } from "./support/test-web-app.ts";
 
 const data = temporaryAgentsInTheCloudDataDir();
@@ -13,6 +14,7 @@ describe("launch title generation", () => {
     { agentTypeId: "builtin", launch: agent.nativeAgentLaunch, model: "provider::model" },
     { agentTypeId: "codex", launch: codexModule.agentType!.launch, model: "openai-codex::gpt-5.4" },
     { agentTypeId: "codex-cli", launch: codexCliModule.agentType!.launch, model: "openai-codex::gpt-5.4" },
+    { agentTypeId: "claude", launch: claudeModule.agentType!.launch, model: "anthropic::claude-opus-5-5" },
   ])("names $agentTypeId from the launch prompt after provisioning without an Agent", async ({ agentTypeId, launch, model }) => {
     const prepare = spyOn(launch, "prepare").mockImplementation(async (parameters) => ({ agent: { initialPrompt: String(parameters?.initialPrompt ?? ""), model: String(parameters?.model ?? "") } }));
     const name = spyOn(agent, "maybeNameWorkspaceFromPrompt").mockImplementation(() => {});

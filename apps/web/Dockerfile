@@ -19,8 +19,10 @@ WORKDIR /app
 
 COPY . .
 
+# Claude Code runs in workspaces; the Agent SDK's bundled platform binaries are never used here.
 RUN --mount=type=cache,target=/root/.bun/install/cache \
-    bun install --frozen-lockfile
+    bun install --frozen-lockfile \
+    && rm -rf node_modules/.bun/@anthropic-ai+claude-agent-sdk-*
 
 FROM deps AS build
 RUN bun run --cwd apps/web build:client

@@ -59,7 +59,8 @@ function manager(digest: string) {
   return new UpdateManager({
     detectRuntime: async () => ({ repository: "ghcr.io/lucasmeijer/agents-in-the-cloud", currentDigest: `sha256:${"0".repeat(64)}` }),
     // Fixture registry supplies immutable manifests; preparation is the production code.
-    fetchMetadata: async () => ({ digest }),
+    fetchMetadata: async () => ({ digest, requiredSystemVersion: 0 }),
+    readSystemVersion: async () => 1,
     prepareUpdate: (reference, progress) => prepareUpdate(`${registry}/agents-in-the-cloud@${reference.split("@")[1]}`, progress),
     readChannel: readStoredUpdateChannel, writeChannel: writeStoredUpdateChannel,
     setInterval: () => {},

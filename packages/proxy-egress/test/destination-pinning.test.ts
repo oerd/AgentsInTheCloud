@@ -8,7 +8,9 @@ import { join } from "node:path";
 import { request } from "node:http";
 import { startWorkspaceEgressProxy } from "../src/egress/egress-proxy.ts";
 import { ensureLeafCertificate, ensureMitmCa } from "../src/egress/mitm-ca.ts";
-import { createHttpHooks } from "../src/secrets/placeholder-hooks.ts";
+import { createHttpHooks, type CreateHttpHooksOptions } from "../src/secrets/placeholder-hooks.ts";
+import { privateNetworkAccessAllows } from "../src/secrets/workspace-secrets.ts";
+import type { PrivateNetworkDestination } from "@agents-in-the-cloud/workspace-templates";
 
 /**
  * DNS rebinding: the policy check and the upstream connection must use the
@@ -37,11 +39,18 @@ type Recorded = {
   lookups: string[];
 };
 
-async function proxiedWorkspace(hostnames: Record<string, { first: string; later: string }>, options: { mitmHost?: string; stableCalls?: number } = {}) {
+async function proxiedWorkspace(hostnames: Record<string, { first: string; later: string }>, options: { mitmHost?: string; stableCalls?: number; privateNetworkAccess?: PrivateNetworkDestination[] } = {}) {
   const directory = await mkdtemp(join(tmpdir(), "agents-in-the-cloud-pin-"));
   const ca = await ensureMitmCa({ agentsInTheCloudDataDir: directory, dockerHostAgentsInTheCloudDataDir: directory, dockerBridgeHost: "127.0.0.1" });
   const rebind = rebindingLookup(hostnames, options.stableCalls ?? 1);
-  const hooks = createHttpHooks(options.mitmHost ? { secrets: { API_KEY: { hosts: [options.mitmHost], value: "mitm-secret", placeholder: "ATELIER_PIN_PLACEHOLDER" } } } : {});
+  const hookOptions: CreateHttpHooksOptions & { onRequest?: undefined } = {};
+  if (options.mitmHost) hookOptions.secrets = { API_KEY: { hosts: [options.mitmHost], value: "mitm-secret", placeholder: "ATELIER_PIN_PLACEHOLDER" } };
+  const privateNetworkAccess = options.privateNetworkAccess;
+  if (privateNetworkAccess) {
+    hookOptions.blockInternalRanges = false;
+    hookOptions.isIpAllowed = info => privateNetworkAccessAllows(privateNetworkAccess, info);
+  }
+  const hooks = createHttpHooks(hookOptions);
   const recorded: Recorded = { fetches: [], connects: [], lookups: [] };
   // A local sink accepts tunnel connections so tests need no real upstream network.
   const sinkConnections = new Set<net.Socket>();
@@ -191,6 +200,33 @@ test("blocked destinations are refused before any upstream connection", async ()
     expect(result.status).toBe(403);
     expect(workspace.recorded.fetches).toEqual([]);
     expect(workspace.recorded.connects).toEqual([]);
+  } finally {
+    await workspace.dispose();
+  }
+});
+
+test("private network access opens only the listed host and port", async () => {
+  const workspace = await proxiedWorkspace({
+    "db.internal": { first: "10.0.0.5", later: "10.0.0.5" },
+    "other.internal": { first: "10.0.0.6", later: "10.0.0.6" },
+    "docker.internal": { first: "172.17.0.2", later: "172.17.0.2" },
+    "metadata.internal": { first: "169.254.169.254", later: "169.254.169.254" },
+  }, { privateNetworkAccess: [{ host: "db.internal", port: 8080 }, { host: "docker.internal", port: 80 }, { host: "metadata.internal", port: 80 }, { host: "fd00::5", port: 443 }] });
+  try {
+    expect((await proxyFetch(workspace.socketPath, "http://db.internal:8080/data")).status).toBe(200);
+    expect(workspace.recorded.fetches.map(fetch => fetch.url)).toEqual(["http://10.0.0.5:8080/data"]);
+    const otherPort = await proxyFetch(workspace.socketPath, "http://db.internal:8081/data");
+    expect(otherPort.status).toBe(403);
+    expect(otherPort.body).toContain("add db.internal:8081 under Private network access");
+    expect((await proxyFetch(workspace.socketPath, "http://other.internal:8080/data")).status).toBe(403);
+    // Docker networks and cloud metadata stay closed, even when listed.
+    expect((await proxyFetch(workspace.socketPath, "http://docker.internal/data")).status).toBe(403);
+    expect((await proxyFetch(workspace.socketPath, "http://metadata.internal/data")).status).toBe(403);
+    const { response, socket } = await proxyConnect(workspace.socketPath, "[fd00::5]:443");
+    expect(response).toStartWith("HTTP/1.1 200");
+    expect(workspace.recorded.connects).toEqual([{ port: 443, address: "fd00::5" }]);
+    socket.destroy();
+    expect(workspace.recorded.fetches).toHaveLength(1);
   } finally {
     await workspace.dispose();
   }

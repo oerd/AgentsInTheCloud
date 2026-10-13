@@ -4,10 +4,12 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { ownerFromRepository, upstreamImageRepository } from "../../packages/core/src/ghcr.ts";
 import { authenticateRegistry, commandRunner, ensureBuilders, inspectImage, inspectPlatform, platforms, type Run } from "../../scripts/release-support.ts";
+import { systemVersion, systemVersionLabel } from "../../packages/shared/src/system-version.ts";
 
 const root = resolve(import.meta.dir, "../..");
 
-export async function publishSystem(run: Run, directory: string, options: { check: boolean; image: string }) {
+/** Installations follow System on the same channel as their app, so stable apps never meet an untested System. */
+export async function publishSystem(run: Run, directory: string, options: { check: boolean; stable: boolean; image: string }) {
   const owner = ownerFromRepository(options.image);
   if (!options.check && (await run(["git", "status", "--porcelain"])).stdout.trim())
     throw new Error("Commit changes before publishing System.");
@@ -30,6 +32,7 @@ export async function publishSystem(run: Run, directory: string, options: { chec
     await run(["docker", "--context", context, "buildx", "build", "--platform", platform,
       "--provenance=false", "--push", "--progress", "plain", "--tag", slice,
       "--label", `org.opencontainers.image.revision=${revision}`,
+      "--label", `${systemVersionLabel}=${systemVersion}`,
       "--file", "images/system/Dockerfile", "images/system"], { stream: true });
     const manifest = JSON.parse((await run(["docker", "buildx", "imagetools", "inspect", slice, "--format", "{{json .Manifest}}"])).stdout);
     if (!/^sha256:[a-f0-9]{64}$/.test(manifest.digest)) throw new Error(`Registry returned no digest for ${slice}`);
@@ -44,10 +47,12 @@ export async function publishSystem(run: Run, directory: string, options: { chec
       throw new Error(`${ref}: combined manifest does not contain verified slice ${slice}`);
   }
   console.log(`Published ${ref}@${combined.digest}`);
-  await run(["docker", "buildx", "imagetools", "create", "--tag", `${options.image}:latest`, `${options.image}@${combined.digest}`], { stream: true });
-  if ((await inspectImage(run, `${options.image}:latest`))!.digest !== combined.digest)
-    throw new Error(`${options.image}:latest: registry digest differs from ${ref}`);
-  console.log(`Promoted ${options.image}:latest to ${combined.digest}`);
+  for (const channel of options.stable ? ["latest", "stable"] : ["latest"]) {
+    await run(["docker", "buildx", "imagetools", "create", "--tag", `${options.image}:${channel}`, `${options.image}@${combined.digest}`], { stream: true });
+    if ((await inspectImage(run, `${options.image}:${channel}`))!.digest !== combined.digest)
+      throw new Error(`${options.image}:${channel}: registry digest differs from ${ref}`);
+    console.log(`Promoted ${options.image}:${channel} to ${combined.digest}`);
+  }
 }
 
 if (import.meta.main) {
@@ -56,7 +61,7 @@ if (import.meta.main) {
   let invalid: string | undefined;
   for (let index = 0; index < args.length; index++) {
     const arg = args[index]!;
-    if (["--check", "--help", "-h"].includes(arg)) continue;
+    if (["--check", "--stable", "--help", "-h"].includes(arg)) continue;
     if (arg === "--image") {
       const value = args[++index];
       if (!value || value.startsWith("--")) { invalid = "--image requires a repository"; break; }
@@ -64,10 +69,10 @@ if (import.meta.main) {
     } else { invalid = `Unknown option: ${arg}`; break; }
   }
   if (invalid) {
-    console.error(`${invalid}\nUsage: images/system/publish.sh [--check] [--image REPOSITORY]`);
+    console.error(`${invalid}\nUsage: images/system/publish.sh [--stable] [--check] [--image REPOSITORY]`);
     process.exitCode = 1;
   } else if (args.includes("--help") || args.includes("-h")) {
-    console.log("Publish System's commit image using two native Docker daemons and move latest to it.\nRequires ATELIER_RELEASE_HELPER=[user@]hostname and GH_PACKAGE_TOKEN.\n--image selects the System repository. --check validates both native builders without publishing.");
+    console.log("Publish System's commit image using two native Docker daemons and move latest to it.\nRequires ATELIER_RELEASE_HELPER=[user@]hostname and GH_PACKAGE_TOKEN.\n--stable also moves stable, for installations on the Stable update channel.\n--image selects the System repository. --check validates both native builders without publishing.");
   } else {
     const directory = mkdtempSync(join(tmpdir(), "agents-in-the-cloud-system-publish-"));
     const commands = commandRunner(root, text => process.stdout.write(text));
@@ -80,7 +85,7 @@ if (import.meta.main) {
       return commands.run(args, options);
     };
     try {
-      await publishSystem(run, directory, { check: args.includes("--check"), image });
+      await publishSystem(run, directory, { check: args.includes("--check"), stable: args.includes("--stable"), image });
     } catch (error) {
       console.error(error instanceof Error ? error.message : String(error));
       process.exitCode = 1;

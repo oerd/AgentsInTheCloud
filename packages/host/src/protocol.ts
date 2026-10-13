@@ -11,14 +11,20 @@ export interface HostResults {
   create: HostTerminal;
   terminate: null;
   sample: HostSample;
+  "private-network-access": null;
 }
 export type HostResult = HostResults[keyof HostResults];
 const terminalId = Type.String({ pattern: "^host-[a-f0-9-]{36}$" });
+/** A TCP destination one workspace bridge may reach on a private network. System validates it before use. */
+const privateNetworkFirewallEntry = Type.Object({ bridge: Type.String(), address: Type.String(), port: Type.Integer() }, { additionalProperties: false });
+export type PrivateNetworkFirewallEntry = Static<typeof privateNetworkFirewallEntry>;
 const requestSchema = Type.Union([
   Type.Object({ operation: Type.Literal("list") }),
   Type.Object({ operation: Type.Literal("create") }),
   Type.Object({ operation: Type.Literal("terminate"), id: terminalId }),
   Type.Object({ operation: Type.Literal("sample"), fresh: Type.Optional(Type.Boolean()) }),
+  // Replaces every workspace's private network destinations.
+  Type.Object({ operation: Type.Literal("private-network-access"), destinations: Type.Array(privateNetworkFirewallEntry, { maxItems: 100_000 }) }),
   Type.Object({ operation: Type.Literal("attach"), id: terminalId, cols: Type.Optional(Type.Integer({ minimum: 1, maximum: 1000 })), rows: Type.Optional(Type.Integer({ minimum: 1, maximum: 1000 })) }),
 ]);
 export type HostRequest = Static<typeof requestSchema>;

@@ -4,8 +4,10 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { UpdateManager, createUpdateRouteHandler, type UpdateManagerDeps } from "../../src/server/index.ts";
+import type { ImageMetadata } from "../../src/server/registry.ts";
 import { readStoredUpdateChannel, writeStoredUpdateChannel } from "../../src/server/settings-store.ts";
-import { requestSupervisorUpdate } from "../../src/server/supervisor.ts";
+import { readSystemVersion, requestSupervisorUpdate } from "../../src/server/supervisor.ts";
+import { requiredSystemVersion } from "@agents-in-the-cloud/shared/system-version";
 
 function context() {
   const sidebar: string[] = [];
@@ -50,8 +52,9 @@ const exact = `${repository}@${newDigest}`;
 function manager(extra: UpdateManagerDeps = {}) {
   return new UpdateManager({
     detectRuntime: async () => ({ repository, currentDigest: oldDigest }),
-    fetchMetadata: async () => ({ digest: newDigest }),
+    fetchMetadata: async () => ({ digest: newDigest, requiredSystemVersion: 0 }),
     prepareUpdate: async (reference) => ({ reference, imageId: "sha256:prepared-image-id" }),
+    readSystemVersion: async () => requiredSystemVersion,
     setInterval: noInterval, ...extra,
   });
 }
@@ -65,6 +68,48 @@ test("non-System installations neither discover updates nor accept update operat
     const url = new URL(path, "http://localhost");
     expect((await route(new Request(url, { method: "POST" }), url))!.status).toBe(409);
   }
+});
+test("an update needing a newer System is offered normally; choosing it points to the installer instead of downloading", async () => {
+  const { ctx, sidebar, broadcasts } = context();
+  const instance = manager({ readSystemVersion: async () => 2, fetchMetadata: async () => ({ digest: newDigest, requiredSystemVersion: 3 }), prepareUpdate: async () => { throw new Error("must not download"); } });
+  await instance.initialize(ctx);
+  expect(instance.snapshot()).toMatchObject({ state: "available", systemOutdated: false });
+  expect(broadcasts.at(-1)!).toContain("Get update");
+  expect(broadcasts.at(-1)!).not.toContain("Download update");
+  expect(broadcasts.at(-1)!).not.toContain("installer");
+
+  await instance.startPull();
+  expect(instance.snapshot().state).toBe("installer_required");
+  for (const html of [sidebar.at(-1)!, broadcasts.at(-1)!]) {
+    expect(html).toContain("To get this version, run the installer again");
+    expect(html).toContain("curl -fsSL https://agentsinthecloud.com/install.sh | bash");
+    expect(html).not.toContain("Get update");
+  }
+  // Background checks keep the installer guidance for the same update.
+  await instance.checkNow();
+  expect(instance.snapshot().state).toBe("installer_required");
+
+  const route = createUpdateRouteHandler(instance);
+  const url = new URL("http://localhost/update/dismiss-installer");
+  expect((await route(new Request(url, { method: "POST" }), url))!.status).toBe(200);
+  expect(instance.snapshot().state).toBe("available");
+  expect(broadcasts.at(-1)!).toContain("Get update");
+});
+test("an app running on an older System keeps asking for the installer, whatever the updater is doing", async () => {
+  const { ctx, sidebar, broadcasts } = context();
+  const instance = manager({ readSystemVersion: async () => requiredSystemVersion - 1, fetchMetadata: async () => ({ digest: oldDigest, requiredSystemVersion: 0 }) });
+  await instance.initialize(ctx);
+  expect(instance.snapshot()).toMatchObject({ state: "idle", systemOutdated: true });
+  for (const html of [sidebar.at(-1)!, broadcasts.at(-1)!]) {
+    expect(html).toContain("Finish updating");
+    expect(html).toContain("Existing workspaces will survive but be interrupted.");
+    expect(html).toContain("curl -fsSL https://agentsinthecloud.com/install.sh | bash");
+  }
+});
+test("System reports its version through the supervisor; older Systems report none", async () => {
+  expect(await readSystemVersion(async () => Response.json({ systemVersion: 4, healthy: true }))).toBe(4);
+  expect(await readSystemVersion(async () => Response.json({ healthy: true }))).toBe(0);
+  await expect(readSystemVersion(async () => new Response("", { status: 503 }))).rejects.toThrow("Supervisor status failed: 503");
 });
 test("download remains in progress until all preparation completes; restart uses the exact prepared image", async () => {
   const gate = deferred();
@@ -125,13 +170,13 @@ test("restart route acknowledges same-origin reload only after supervisor accept
   expect(response.headers.has("location")).toBe(false);
 });
 test("background checks cannot replace a pinned download or prepared target", async () => {
-  const pendingCheck = deferred<{ digest: string }>();
+  const pendingCheck = deferred<ImageMetadata>();
   let checks = 0;
-  const instance = manager({ fetchMetadata: async () => ++checks === 1 ? { digest: newDigest } : pendingCheck.promise });
+  const instance = manager({ fetchMetadata: async () => ++checks === 1 ? { digest: newDigest, requiredSystemVersion: 0 } : pendingCheck.promise });
   await instance.initialize(context().ctx);
   const stale = instance.checkNow();
   await instance.startPull();
-  pendingCheck.resolve({ digest: newerDigest });
+  pendingCheck.resolve({ digest: newerDigest, requiredSystemVersion: 0 });
   await stale;
   await instance.checkNow();
   expect(instance.snapshot().target!.digest).toBe(newDigest);
@@ -161,14 +206,14 @@ test("channel changes persist, discard prior prepared images, and survive manage
 });
 test("a superseded channel check cannot publish success or failure", async () => {
   for (const fail of [false, true]) {
-    const pending = deferred<{ digest: string }>();
-    const instance = manager({ readChannel: async () => "stable", fetchMetadata: async (_repository, channel) => channel === "latest" ? pending.promise : { digest: newDigest } });
+    const pending = deferred<ImageMetadata>();
+    const instance = manager({ readChannel: async () => "stable", fetchMetadata: async (_repository, channel) => channel === "latest" ? pending.promise : { digest: newDigest, requiredSystemVersion: 0 } });
     await instance.initialize(context().ctx);
     const stale = instance.setUpdateChannel("latest");
     await Bun.sleep(0);
     await instance.setUpdateChannel("stable");
     const snapshot = instance.snapshot();
-    if (fail) pending.reject(new Error("registry failed")); else pending.resolve({ digest: newerDigest });
+    if (fail) pending.reject(new Error("registry failed")); else pending.resolve({ digest: newerDigest, requiredSystemVersion: 0 });
     await stale;
     expect(instance.snapshot()).toEqual(snapshot);
   }
@@ -188,7 +233,7 @@ test("new installations discover latest updates and pin their immutable image", 
   const prepared: string[] = [];
   const instance = manager({
     readChannel: async () => undefined,
-    fetchMetadata: async (selectedRepository, channel) => { expect(selectedRepository).toBe(repository); channels.push(channel); return { digest: newDigest }; },
+    fetchMetadata: async (selectedRepository, channel) => { expect(selectedRepository).toBe(repository); channels.push(channel); return { digest: newDigest, requiredSystemVersion: 0 }; },
     prepareUpdate: async (reference) => { prepared.push(reference); return { reference, imageId: "sha256:latest-image" }; },
   });
   expect(instance.snapshot().updateChannel).toBe("latest");
@@ -204,7 +249,7 @@ test.each(["stable", "latest"] as const)("stored %s channel overrides the latest
   const channels: string[] = [];
   const instance = manager({
     readChannel: async () => channel,
-    fetchMetadata: async (_repository, selected) => { channels.push(selected); return { digest: newDigest }; },
+    fetchMetadata: async (_repository, selected) => { channels.push(selected); return { digest: newDigest, requiredSystemVersion: 0 }; },
   });
   await instance.initialize(context().ctx);
   expect(instance.snapshot().updateChannel).toBe(channel);
@@ -223,7 +268,7 @@ test("switching from stable to latest persists the channel and refreshes the tar
       writeChannel: writeStoredUpdateChannel,
       fetchMetadata: async (_repository: string, channel: "stable" | "latest") => {
         channels.push(channel);
-        return { digest: channel === "latest" ? newerDigest : newDigest };
+        return { digest: channel === "latest" ? newerDigest : newDigest, requiredSystemVersion: 0 };
       },
     };
     const instance = manager(dependencies);

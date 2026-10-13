@@ -12,7 +12,7 @@ import {
   listWorkspaceTemplates, parseWorkspaceTemplateSpec, renameWorkspaceTemplateSshKey,
   workspaceTemplateSecretPathPermissionSchema,
   setWorkspaceTemplateDockerfile, setWorkspaceTemplatePreloadImages, setWorkspaceTemplatePrivileged, setWorkspaceTemplateSeedConfigEnabled,
-  setWorkspaceTemplateSshKnownHosts,
+  setPrivateNetworkAccess, setWorkspaceTemplateSshKnownHosts,
   updateWorkspaceTemplate,
   updateWorkspaceTemplateEnvironmentVariable, updateWorkspaceTemplateSecret,
   type ConfigurationScope, type WorkspaceTemplateEnvironmentVariable, type WorkspaceTemplateSecretInput, type WorkspaceTemplateSecretSummary, type WorkspaceTemplateSshKeySummary, type WorkspaceTemplateSummary,
@@ -147,13 +147,13 @@ export function createWorkspaceTemplateRoutes(deps: {
     return await settingsPageResponse(request, workspaceTemplateId, section, record, false);
   }
 
-  type ConfigurationResult = { secret: WorkspaceTemplateSecretSummary; deleted?: true } | { environmentVariable: WorkspaceTemplateEnvironmentVariable; deleted?: true } | { key: WorkspaceTemplateSshKeySummary } | { knownHosts: string };
+  type ConfigurationResult = { secret: WorkspaceTemplateSecretSummary; deleted?: true } | { environmentVariable: WorkspaceTemplateEnvironmentVariable; deleted?: true } | { key: WorkspaceTemplateSshKeySummary } | { knownHosts: string } | { privateNetworkAccess: string[] };
 
   /**
    * Secrets, SSH keys and Environment variables re-render whichever settings page edited them.
    * Save/create remains in the record's editor; deletion returns to the list because that editor no longer exists.
    */
-  async function configurationSettingsResponse(request: Request, scope: ConfigurationScope, name: "secrets" | "ssh" | "environment", record: string, result: ConfigurationResult): Promise<Response> {
+  async function configurationSettingsResponse(request: Request, scope: ConfigurationScope, name: "secrets" | "ssh" | "environment" | "network", record: string | undefined, result: ConfigurationResult): Promise<Response> {
     deps.invalidatePresentation();
     if (requestAcceptsJson(request)) return jsonResponse(result);
     const url = new URL(request.url);
@@ -291,6 +291,17 @@ export function createWorkspaceTemplateRoutes(deps: {
     return configurationSettingsResponse(request, scope, "ssh", "known-hosts", { knownHosts });
   }
 
+  async function updatePrivateNetworkAccessEndpoint(scope: ConfigurationScope, request: Request): Promise<Response> {
+    let input: string;
+    if (requestAcceptsJson(request)) {
+      const destinations = (await readJsonObject(request)).privateNetworkAccess;
+      if (!Value.Check(Type.Array(Type.String()), destinations)) throw invalidArguments("privateNetworkAccess must be an array of host:port strings");
+      input = destinations.join("\n");
+    } else input = String((await request.formData()).get("privateNetworkAccess") ?? "");
+    const privateNetworkAccess = await setPrivateNetworkAccess(scope, input);
+    return configurationSettingsResponse(request, scope, "network", undefined, { privateNetworkAccess });
+  }
+
   async function createSshKeyFromForm(scope: ConfigurationScope, request: Request): Promise<Response> {
     const formData = await request.formData();
     const key = await createWorkspaceTemplateSshKey(scope, String(formData.get("privateKey") ?? ""), undefined, undefined, String(formData.get("name") ?? ""));
@@ -308,9 +319,9 @@ export function createWorkspaceTemplateRoutes(deps: {
     return configurationSettingsResponse(request, scope, "ssh", key.id, { key });
   }
 
-  /** Secrets, SSH keys and Environment variables for a template or for all workspaces share one set of endpoints. */
+  /** Secrets, SSH keys, Environment variables and Private network access for a template or for all workspaces share one set of endpoints. */
   async function handleConfigurationRoute(request: Request, url: URL): Promise<Response | undefined> {
-    const match = url.pathname.match(/^\/(?:workspace-templates\/([^/]+)|global-workspace-settings)\/(secrets|environment|ssh-keys|ssh-known-hosts)(?:\/([^/]+))?(?:\/(delete|public-key))?$/);
+    const match = url.pathname.match(/^\/(?:workspace-templates\/([^/]+)|global-workspace-settings)\/(secrets|environment|ssh-keys|ssh-known-hosts|private-network-access)(?:\/([^/]+))?(?:\/(delete|public-key))?$/);
     if (!match) return undefined;
     const [, workspaceTemplateId, concern, recordId, action] = match;
     const scope: ConfigurationScope = workspaceTemplateId === undefined ? globalWorkspaceConfiguration : decodeURIComponent(workspaceTemplateId);
@@ -337,6 +348,11 @@ export function createWorkspaceTemplateRoutes(deps: {
         if (record) return undefined;
         if (request.method === "GET" && requestAcceptsJson(request)) return jsonResponse({ knownHosts: await getWorkspaceTemplateSshKnownHosts(scope) });
         if (post) return await updateSshKnownHostsEndpoint(scope, request);
+        return undefined;
+      case "private-network-access":
+        if (record) return undefined;
+        if (request.method === "GET" && requestAcceptsJson(request)) return jsonResponse({ privateNetworkAccess: (await getConfiguration(scope)).privateNetworkAccess });
+        if (post) return await updatePrivateNetworkAccessEndpoint(scope, request);
     }
     return undefined;
   }

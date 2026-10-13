@@ -1,4 +1,4 @@
-export type SlashCommandSource = "agents-in-the-cloud" | "codex";
+export type SlashCommandSource = "agents-in-the-cloud" | "codex" | "claude";
 
 export interface BuiltinSlashCommand {
   source: SlashCommandSource;

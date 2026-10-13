@@ -38,6 +38,14 @@ export async function inspectImage(run: Run, ref: string, optional = false) {
   return manifest;
 }
 
+/** The labels of each platform image in a multi-platform manifest. */
+export async function platformLabels(run: Run, repository: string, manifest: NonNullable<Awaited<ReturnType<typeof inspectImage>>>): Promise<Record<string, string>[]> {
+  return await Promise.all(manifest.manifests.map(async (entry) => {
+    const result = await run(["docker", "buildx", "imagetools", "inspect", `${repository}@${entry.digest}`, "--format", "{{json .Image}}"]);
+    return Value.Parse(configSchema, JSON.parse(result.stdout)).config.Labels;
+  }));
+}
+
 export async function inspectPlatform(run: Run, ref: string, platform: string, revision: string) {
   const result = await run(["docker", "buildx", "imagetools", "inspect", ref, "--format", "{{json .Image}}"]);
   const config = Value.Parse(configSchema, JSON.parse(result.stdout));

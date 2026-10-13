@@ -3,13 +3,13 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-for (const id of ["codex-cli", "claude", "pi"]) {
+for (const id of ["codex-cli", "claude-cli", "pi"]) {
   test(`${id} adapter validates settings, installs credentials and builds its CLI launch`, async () => {
     const directory = await mkdtemp(join(tmpdir(), `${id}-adapter-`));
     const source = join(import.meta.dir, `../../../packages/${id}-agent/src/server`);
     const model = id === "pi" ? "custom::model" : id === "codex-cli" ? "openai-codex::gpt-5.4" : "anthropic::claude-opus-4-6";
     const npmPackage = id === "pi" ? "@earendil-works/pi-coding-agent@latest" : id === "codex-cli" ? "@openai/codex@latest" : "@anthropic-ai/claude-code@latest";
-    const mcpConfigMarker = id === "codex-cli" ? "config.toml" : id === "claude" ? "claude-mcp.json" : "/pi-agents-in-the-cloud";
+    const mcpConfigMarker = id === "codex-cli" ? "config.toml" : id === "claude-cli" ? "claude-mcp.json" : "/pi-agents-in-the-cloud";
     try {
       const child = Bun.spawn([process.execPath, "-e", `
         import { expect, mock } from "bun:test";

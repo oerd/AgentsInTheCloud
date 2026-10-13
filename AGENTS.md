@@ -22,6 +22,16 @@ Do not write UI tests. Follow the [UI testing policy](docs/ui-testing-policy.md)
 - When controlling or staging an AgentsInTheCloud instance programmatically, follow [docs/automation.md](docs/automation.md).
 - Whenever modifying the user interface, use elements from the [AgentsInTheCloud design system catalogue](packages/design-system/README.md) whenever possible.
 
+### App and System compatibility
+
+The app and System are released and updated separately; `packages/shared/src/system-version.ts` is the contract between them.
+
+- When System gains something the app may rely on, bump `systemVersion` and note what it added. When the app starts relying on it, raise `requiredSystemVersion`.
+- Publish System to a channel (`images/system/publish.sh`, plus `--stable`) before releasing an app that needs it. `bun run release` refuses otherwise.
+- Don't add fallbacks for older Systems. The updater won't install an app that needs a newer System and points people to the installer, which updates both. An app that still ends up on an older System shows the "Finish updating" warning; that is the only degraded mode.
+- User-facing copy never says "System". People know it as the installer and the computer AgentsInTheCloud is installed on.
+- System doesn't need to run older apps than its own channel's. Keep System protocol changes (host socket operations, mounts, `/status` fields) explicit, so a mismatch fails loudly rather than misbehaving quietly.
+
 ### Composer and soft-keyboard acceptance scripts
 
 - Changes touching the composer, transcript scroll, floating buttons or terminal sizing must run `acceptance/composer-layout.ts`.

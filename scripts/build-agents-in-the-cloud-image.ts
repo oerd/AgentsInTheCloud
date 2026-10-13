@@ -3,6 +3,9 @@
 import { workloadCgroupArgs } from "@agents-in-the-cloud/core";
 import { ownerFromRepository, upstreamImageRepository } from "../packages/core/src/ghcr.ts";
 import { rmSync } from "node:fs";
+import { join } from "node:path";
+import { Type } from "typebox";
+import { Value } from "typebox/value";
 import { arch } from "node:os";
 import { imageHasPlatforms } from "../packages/workspace-image/src/local-images.ts";
 import { registryImageHasPlatforms } from "./image-platforms.ts";
@@ -301,9 +304,15 @@ const defaultBuildArgs = [
   `ATELIER_EAGERLY_PRELOAD=${JSON.stringify([publishedWorkspaceRef])}`,
 ];
 const allBuildArgs = [...defaultBuildArgs, ...options.buildArgs];
+// Like the workspace image, the System requirement comes from the checkout being built, not this script's copy.
+const systemCompatibility = Value.Parse(
+  Type.Object({ requiredSystemVersion: Type.Integer({ minimum: 0 }), requiredSystemVersionLabel: Type.String() }),
+  await import(join(process.cwd(), "packages/shared/src/system-version.ts")),
+);
 
 await buildImage(imageRefs, [
   ...allBuildArgs.flatMap((buildArg) => ["--build-arg", buildArg]),
+  "--label", `${systemCompatibility.requiredSystemVersionLabel}=${systemCompatibility.requiredSystemVersion}`,
   "--file", "apps/web/Dockerfile", ".",
 ]);
 

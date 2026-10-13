@@ -11,9 +11,10 @@ import { parseHostRequest, parseHostInput, type HostCommand, type HostSample, ty
 import { cpuPercent, counters, effectiveCpu, filesystemUsage } from "./system/sampler.ts";
 
 const sample: HostSample = { sampledAt: "2026-01-01T00:00:00.000Z", durationMs: 1000, metrics: [], sections: [] };
+const noPrivateNetworkAccess = async () => {};
 test("sample cache and concurrent requests share one bounded collection", async () => {
   let count = 0;
-  const service = new HostService(async () => { count++; await Bun.sleep(10); return sample; });
+  const service = new HostService(async () => { count++; await Bun.sleep(10); return sample; }, noPrivateNetworkAccess);
   await Promise.all([service.handle({ operation: "sample" }), service.handle({ operation: "sample", fresh: true })]);
   expect(count).toBe(1);
   expect(await service.handle({ operation: "sample" })).toEqual(sample);
@@ -23,7 +24,7 @@ test("sample cache and concurrent requests share one bounded collection", async 
 });
 test("failed sampling can be retried", async () => {
   let count = 0;
-  const service = new HostService(async () => { if (++count === 1) throw new Error("broken"); return sample; });
+  const service = new HostService(async () => { if (++count === 1) throw new Error("broken"); return sample; }, noPrivateNetworkAccess);
   await expect(service.handle({ operation: "sample" })).rejects.toThrow("broken");
   expect(await service.handle({ operation: "sample" })).toEqual(sample);
 });
@@ -43,6 +44,17 @@ test("control boundary rejects unknown operations, session injection and invalid
   expect(() => parseHostInput('{"input":"ls"}')).toThrow();
   expect(() => parseHostRequest(JSON.stringify({ operation: "rename", id: `host-${crypto.randomUUID()}`, title: "Removed operation" }))).toThrow();
 });
+test("private network access replaces destinations through the System handler", async () => {
+  const destinations = [{ bridge: "atw-0123456789a", address: "10.1.2.3", port: 5432 }];
+  let received: unknown;
+  const service = new HostService(async () => sample, async value => { received = value; });
+  expect(parseHostRequest(JSON.stringify({ operation: "private-network-access", destinations }))).toEqual({ operation: "private-network-access", destinations });
+  expect(await service.handle({ operation: "private-network-access", destinations })).toBeNull();
+  expect(received).toEqual(destinations);
+  // The shape is checked here; System's firewall validates bridges, addresses and ports before using them.
+  for (const destination of [{ ...destinations[0], bridge: 1 }, { ...destinations[0], port: "5432" }, { ...destinations[0], extra: true }])
+    expect(() => parseHostRequest(JSON.stringify({ operation: "private-network-access", destinations: [destination] }))).toThrow();
+});
 
 describe.skip("System terminal lifecycle over private socket", () => {
   let directory: string;
@@ -53,7 +65,7 @@ describe.skip("System terminal lifecycle over private socket", () => {
   beforeAll(async () => {
     directory = await mkdtemp(join(tmpdir(), "agents-in-the-cloud-host-"));
     socketPath = join(directory, "host.sock");
-    server = await startHostService({ socketPath, tmuxSocketName, root: "/unused", effectiveMemory: 0 });
+    server = await startHostService({ socketPath, tmuxSocketName, root: "/unused", effectiveMemory: 0, privateNetworkAccess: noPrivateNetworkAccess });
   });
   afterAll(async () => {
     await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
@@ -78,7 +90,7 @@ describe.skip("System terminal lifecycle over private socket", () => {
     await Bun.sleep(100);
     socket.destroy(); lines.close();
     await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
-    server = await startHostService({ socketPath, tmuxSocketName, root: "/unused", effectiveMemory: 0 });
+    server = await startHostService({ socketPath, tmuxSocketName, root: "/unused", effectiveMemory: 0, privateNetworkAccess: noPrivateNetworkAccess });
     await Bun.sleep(500);
     expect(await Bun.file(marker).text()).toBe("alive");
     expect((await call({ operation: "list" })).length).toBe(2);

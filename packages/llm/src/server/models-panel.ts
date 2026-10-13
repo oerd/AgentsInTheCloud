@@ -413,11 +413,11 @@ type PendingOAuthFlow = {
   label: string;
   host: ModelsHost;
   revision: number;
+  loginMethod: "default" | "browser";
   status: "pending" | "complete" | "error";
   abort: AbortController;
   settled: Promise<void>;
   authUrl?: string;
-  instructions?: string;
   userCode?: string;
   verificationUri?: string;
   intervalSeconds?: number;
@@ -428,7 +428,7 @@ type PendingOAuthFlow = {
 
 const pendingOAuthFlows = new Map<string, PendingOAuthFlow>();
 
-async function startOAuthFlow(provider: ProviderChoice, host: ModelsHost): Promise<PendingOAuthFlow> {
+async function startOAuthFlow(provider: Pick<ProviderChoice, "provider" | "label">, host: ModelsHost, loginMethod: PendingOAuthFlow["loginMethod"] = "default"): Promise<PendingOAuthFlow> {
   // The credential runtime serializes logins per provider. An abandoned dialog must
   // not leave the next attempt queued behind a device code nobody will approve.
   for (const previous of pendingOAuthFlows.values()) {
@@ -438,12 +438,12 @@ async function startOAuthFlow(provider: ProviderChoice, host: ModelsHost): Promi
     previous.prompt = undefined;
     previous.abort.abort();
   }
-  const flow: PendingOAuthFlow = { id: crypto.randomUUID(), provider: provider.provider, label: provider.label, host, revision: 0, status: "pending", abort: new AbortController(), settled: Promise.resolve() };
+  const flow: PendingOAuthFlow = { id: crypto.randomUUID(), provider: provider.provider, label: provider.label, host, loginMethod, revision: 0, status: "pending", abort: new AbortController(), settled: Promise.resolve() };
   pendingOAuthFlows.set(flow.id, flow);
   flow.settled = loginPiOAuthProvider(provider.provider, {
     signal: flow.abort.signal,
     notify: (event) => {
-      if (event.type === "auth_url") { flow.revision++; flow.authUrl = event.url; flow.instructions = event.instructions; }
+      if (event.type === "auth_url") { flow.revision++; flow.authUrl = event.url; }
       else if (event.type === "device_code") { flow.revision++; flow.userCode = event.userCode; flow.verificationUri = event.verificationUri; flow.intervalSeconds = event.intervalSeconds; }
     },
     prompt: (prompt) => handleOAuthPrompt(flow, prompt),
@@ -463,9 +463,11 @@ async function startOAuthFlow(provider: ProviderChoice, host: ModelsHost): Promi
 
 function handleOAuthPrompt(flow: PendingOAuthFlow, prompt: PiAuthPrompt): Promise<string> {
   if (prompt.type === "select") {
-    const selected = prompt.options.find((option) => /device|headless/i.test(`${option.id} ${option.label ?? ""}`))?.id
-      ?? prompt.options.find((option) => /default/i.test(option.label ?? ""))?.id
-      ?? prompt.options[0]?.id;
+    const selected = flow.loginMethod === "browser"
+      ? prompt.options.find((option) => option.id === "browser")?.id
+      : prompt.options.find((option) => /device|headless/i.test(`${option.id} ${option.label ?? ""}`))?.id
+        ?? prompt.options.find((option) => /default/i.test(option.label ?? ""))?.id
+        ?? prompt.options[0]?.id;
     if (!selected) return Promise.reject(new Error("No OAuth login option available"));
     return Promise.resolve(selected);
   }
@@ -508,10 +510,11 @@ function oauthStatus(kind: "pending" | "done", title: string, detail: string): s
 
 function oauthAuthenticationAction(flow: PendingOAuthFlow, url: string, hidden = false, caption?: string): string {
   const authenticationName = flow.provider === "openai-codex" || flow.provider === "openai" ? "OpenAI" : flow.label;
+  const signInMethod = flow.provider === "openai-codex" ? `${flow.verificationUri ? "device-code" : "browser"} sign-in` : "sign-in";
   return actionLinkHtml({
     href: url,
     variant: "primary",
-    content: { kind: "caption", caption: caption ?? `Open ${authenticationName} sign-in page` },
+    content: { kind: "caption", caption: caption ?? `Open ${authenticationName} ${signInMethod} page` },
     attributesHtml: `target="_blank" rel="noreferrer"${hidden ? ' data-oauth-device-auth hidden data-action="oauth-flow#showWaitingStatus"' : ""}`,
   });
 }
@@ -534,7 +537,7 @@ function oauthDeviceCodeBody(flow: PendingOAuthFlow, complete = false): string {
   </div>`;
 }
 
-function oauthFlowPath(flow: PendingOAuthFlow, action: "status" | "prompt" | "finish" | "cancel"): string {
+function oauthFlowPath(flow: PendingOAuthFlow, action: "status" | "prompt" | "finish" | "cancel" | "browser"): string {
   return `/models/providers/${encodeURIComponent(flow.provider)}/oauth/${encodeURIComponent(flow.id)}/${action}`;
 }
 
@@ -576,6 +579,11 @@ function oauthCompleteBody(flow: PendingOAuthFlow): string {
   return `<div class="settings-oauth-card">${oauthStatus("done", `${flow.label} connected`, "Pick the models you want below.")}</div>`;
 }
 
+/** The ChatGPT paste sits beside device-code sign-in; browser sign-in has its own redirect prompt. */
+function isCodexDeviceFlow(flow: PendingOAuthFlow): boolean {
+  return flow.provider === codexProviderId && flow.loginMethod === "default";
+}
+
 function codexDeviceContents(flow: PendingOAuthFlow): string {
   if (flow.status === "error") return `<p class="settings-error">${escapeHtml(flow.error ?? "OAuth login failed")}</p>`;
   if (flow.verificationUri) return oauthDeviceCodeBody(flow);
@@ -605,7 +613,7 @@ function codexCredentialForm(host: ModelsHost): string {
 function codexFlow(host: ModelsHost): PendingOAuthFlow | undefined {
   let fallback: PendingOAuthFlow | undefined;
   for (const flow of pendingOAuthFlows.values()) {
-    if (flow.provider !== codexProviderId || flow.host !== host) continue;
+    if (!isCodexDeviceFlow(flow) || flow.host !== host) continue;
     if (flow.status === "pending") return flow;
     fallback = flow;
   }
@@ -653,10 +661,27 @@ async function handleCodexCredential(request: Request, host: ModelsHost, renderP
   return panelResponse(host, renderPickerUpdates, { focus: codexProviderId });
 }
 
+function canSwitchToBrowserAuth(flow: PendingOAuthFlow): boolean {
+  return flow.provider === "openai-codex" && flow.loginMethod === "default" && flow.status !== "complete";
+}
+
+function oauthAlternateLoginAction(flow: PendingOAuthFlow): string {
+  if (!canSwitchToBrowserAuth(flow)) return "";
+  return `<form method="post" action="${oauthFlowPath(flow, "browser")}" data-turbo="true">${buttonHtml({
+    type: "submit",
+    variant: flow.status === "error" ? "primary" : "secondary",
+    content: { kind: "caption", caption: "Try browser auth flow instead" },
+    attributesHtml: 'data-turbo-submits-with="Starting sign-in…"',
+  })}</form>`;
+}
+
 function renderOAuthConnectionStep(flow: PendingOAuthFlow, pasteError = ""): string {
   const pollMs = Math.max(1500, Math.min(15000, (flow.intervalSeconds ?? 3) * 1000));
-  const doneButton = buttonHtml({ type: "submit", variant: "primary", content: { kind: "caption", caption: "Done" } });
-  const backButton = buttonHtml({ type: "submit", variant: "secondary", content: { kind: "caption", caption: "Back" } });
+  const exitButton = buttonHtml({
+    type: "submit",
+    variant: flow.status === "complete" ? "primary" : "secondary",
+    content: { kind: "caption", caption: flow.status === "complete" ? "Done" : "Back" },
+  });
   const submitUrlButton = buttonHtml({
     type: "submit",
     variant: "primary",
@@ -674,17 +699,15 @@ function renderOAuthConnectionStep(flow: PendingOAuthFlow, pasteError = ""): str
           : flow.prompt
             ? oauthPromptForm(flow)
             : `<div class="settings-oauth-card">${oauthStatus("pending", "Starting OAuth flow", "Waiting for the provider to respond.")}</div>`;
-  const action = flow.status === "complete"
-    ? `<form method="post" action="${oauthFlowPath(flow, "finish")}" data-turbo="true">${doneButton}</form>`
-    : flow.status === "pending"
-      ? `<form method="post" action="${oauthFlowPath(flow, "cancel")}" data-turbo="true">${backButton}</form>${flow.prompt ? submitUrlButton : ""}`
-      : `<form method="post" action="${oauthFlowPath(flow, "finish")}" data-turbo="true">${backButton}</form>`;
+  const action = `<form method="post" action="${oauthFlowPath(flow, flow.status === "pending" ? "cancel" : "finish")}" data-turbo="true">${exitButton}</form>`
+    + (flow.status === "pending" && flow.prompt ? submitUrlButton : "");
+  const alternateLogin = oauthAlternateLoginAction(flow);
   const paste = pasteError ? `<p class="settings-error" role="alert">${escapeHtml(pasteError)}</p>` : "";
-  const codexPaste = flow.provider === codexProviderId && flow.status !== "complete";
+  const codexPaste = isCodexDeviceFlow(flow) && flow.status !== "complete";
   const shown = codexPaste ? `${codexDeviceFrame(flow, pollMs)}${paste}${codexCredentialForm(flow.host)}` : `${paste}${body}`;
   return renderConnectionStep(flow, flow.host, {
     bodyHtml: `${flow.status !== "complete" ? openAISignInNotice(flow.provider) : ""}${shown}`,
-    actionsHtml: action,
+    actionsHtml: alternateLogin ? `<div class="model-setup-choices">${action}${alternateLogin}</div>` : action,
     attributesHtml: codexPaste ? undefined : oauthFlowControllerAttributes(flow, pollMs),
   });
 }
@@ -803,13 +826,19 @@ export async function handleModelsRequest(request: Request, url: URL, renderPick
     }
     return panelResponse(host, renderPickerUpdates, { focus: provider.provider });
   }
-  match = url.pathname.match(/^\/models\/providers\/([^/]+)\/oauth\/([^/]+)\/(status|prompt|finish|cancel)$/);
+  match = url.pathname.match(/^\/models\/providers\/([^/]+)\/oauth\/([^/]+)\/(status|prompt|finish|cancel|browser)$/);
   if (match && request.method === "POST") {
     const provider = decodeURIComponent(match[1]!);
     const flowId = decodeURIComponent(match[2]!);
     const action = match[3]!;
     const flow = pendingOAuthFlows.get(flowId);
     if (!flow || flow.provider !== provider) return response("Sign-in session expired", { status: 410 });
+    if (action === "browser") {
+      if (!canSwitchToBrowserAuth(flow)) return response("Browser sign-in cannot replace this attempt", { status: 409 });
+      const next = await startOAuthFlow(flow, flow.host, "browser");
+      pendingOAuthFlows.delete(flowId);
+      return stream(replace(ids.connect(flow.host), renderOAuthConnectionStep(next)));
+    }
     if (action === "prompt") {
       const form = await request.formData();
       flow.redirectSubmitted = true;
@@ -826,7 +855,7 @@ export async function handleModelsRequest(request: Request, url: URL, renderPick
       pendingOAuthFlows.delete(flowId);
       return panelResponse(flow.host, renderPickerUpdates);
     }
-    if (action === "status" && flow.provider === codexProviderId) {
+    if (action === "status" && isCodexDeviceFlow(flow)) {
       if (flow.status === "pending" && url.searchParams.get("revision") === String(flow.revision)) return stream("");
       const pollMs = Math.max(1500, Math.min(15000, (flow.intervalSeconds ?? 3) * 1000));
       return stream(replace(domId("models_codex_device", flow.host), codexDeviceFrame(flow, pollMs)));

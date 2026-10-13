@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 
 const installer = await Bun.file(new URL("./install.sh", import.meta.url)).text();
 
-function run(options: { systemState?: "restarting" | "exited"; nonRoot?: boolean; denySudo?: boolean; mac?: boolean; wsl?: boolean; installed?: boolean; old?: boolean; legacyAtelier?: boolean; legacyVolumeOnly?: boolean; legacyPreSystem?: boolean; legacyDownloadFails?: boolean; legacyDelegateFails?: boolean; pullFails?: boolean; pullDenied?: boolean; appFails?: boolean; retryUpdateRequest?: boolean; rejectUpdateRequest?: boolean; pendingHealth?: boolean; missingFilesystem?: boolean; loadable?: boolean; uninstallAnswer?: string; uninstallFails?: boolean; uninstallRequestFails?: boolean; inventoryFails?: boolean; volumeOnly?: boolean; volumeRemovalFails?: boolean; initiallyStopped?: boolean; ghcrOwner?: string; githubOwner?: string; originUrl?: string; installedSystemImage?: string } = {}, args: string[] = []) {
+function run(options: { systemState?: "restarting" | "exited"; nonRoot?: boolean; denySudo?: boolean; mac?: boolean; wsl?: boolean; installed?: boolean; old?: boolean; legacyAtelier?: boolean; legacyVolumeOnly?: boolean; legacyPreSystem?: boolean; legacyDownloadFails?: boolean; legacyDelegateFails?: boolean; pullFails?: boolean; pullDenied?: boolean; appFails?: boolean; retryUpdateRequest?: boolean; rejectUpdateRequest?: boolean; pendingHealth?: boolean; missingFilesystem?: boolean; loadable?: boolean; uninstallAnswer?: string; uninstallFails?: boolean; uninstallRequestFails?: boolean; inventoryFails?: boolean; volumeOnly?: boolean; volumeRemovalFails?: boolean; initiallyStopped?: boolean; ghcrOwner?: string; githubOwner?: string; originUrl?: string; installedSystemImage?: string; channel?: string } = {}, args: string[] = []) {
   const logPath = `/tmp/agents-in-the-cloud-install-test-${crypto.randomUUID()}.log`;
   const mock = `
 git() {
@@ -82,8 +82,9 @@ docker() {
         printf '${options.appFails ? 'failed\\nApp health failed\\n\\n\\n\\n\\nApp exited' : 'ready\\nAgentsInTheCloud is ready\\n\\nhttps://app.example/custom-path\\n\\n\\n'}\\n'
         return
       fi ;;
+    'run --rm') printf '%s\n' ${JSON.stringify(options.channel ?? "latest")}; return 0 ;;
     'logs --tail') echo 'supervisor startup failed: io.weight unavailable';;
-    'inspect --format') if [[ "$*" == *Config.Image* ]]; then echo ${options.installedSystemImage ?? "ghcr.io/lucasmeijer/agents-in-the-cloud-system:latest"}; elif [[ "$*" == *State.Status* ]]; then echo ${options.systemState ?? 'running'}; elif [[ "$*" == *3080/tcp* ]]; then echo 55123; else echo ${options.initiallyStopped ? "false" : "true"}; fi ;;
+    'inspect --format') if [[ "$*" == *Config.Image* ]]; then echo ${options.installedSystemImage ?? "ghcr.io/lucasmeijer/agents-in-the-cloud-system:latest"}; elif [[ "$*" == *'{{.Image}}'* ]]; then echo sha256:installed-system; elif [[ "$*" == *State.Status* ]]; then echo ${options.systemState ?? 'running'}; elif [[ "$*" == *3080/tcp* ]]; then echo 55123; else echo ${options.initiallyStopped ? "false" : "true"}; fi ;;
   esac
 }
 `;
@@ -120,6 +121,34 @@ test("fresh install launches privileged System with persistent named volume and 
   expect(result.output).toContain("DOCKER exec agents-in-the-cloud-system bun -e");
 });
 
+test("new installations start System on latest without reading a channel", () => {
+  const result = run();
+  expect(result.status).toBe(0);
+  expect(result.output).toContain("DOCKER pull ghcr.io/lucasmeijer/agents-in-the-cloud-system:latest");
+  expect(result.output).not.toContain("DOCKER run --rm");
+});
+
+test("updates follow the installation's Update channel for System", () => {
+  for (const channel of ["latest", "stable"]) {
+    const result = run({ installed: true, channel });
+    expect(result.status).toBe(0);
+    expect(result.output).toContain("DOCKER run --rm --mount source=agents-in-the-cloud-system,target=/data,readonly --entrypoint bun sha256:installed-system -e");
+    expect(result.output).toContain(`DOCKER pull ghcr.io/lucasmeijer/agents-in-the-cloud-system:${channel}`);
+  }
+});
+
+test("an explicit System image wins over the channel, and an unknown channel stops before changes", () => {
+  const explicit = run({ installed: true, channel: "stable" }, ["--system-image", "test/system:v2"]);
+  expect(explicit.status).toBe(0);
+  expect(explicit.output).toContain("DOCKER pull test/system:v2");
+  expect(explicit.output).not.toContain("DOCKER run --rm");
+  const unknown = run({ installed: true, channel: "nightly" });
+  expect(unknown.status).not.toBe(0);
+  expect(unknown.output).toContain("Unknown Update channel: nightly");
+  expect(unknown.output).not.toContain("DOCKER pull");
+  expect(unknown.output).not.toContain("DOCKER stop");
+});
+
 test("localhost install publishes a stable loopback port", () => {
   const result = run({}, ["--access-mode", "localhost"]);
   expect(result.status).toBe(0);
@@ -143,7 +172,7 @@ test("failed pull leaves existing System untouched", () => {
   expect(result.status).not.toBe(0);
   expect(result.output).not.toContain("DOCKER stop");
   expect(result.output).not.toContain("DOCKER rm");
-  expect(result.output).not.toContain("DOCKER run");
+  expect(result.output).not.toContain("DOCKER run -d");
 });
 
 test("pull rejected by a stale ghcr.io login explains how to clear it", () => {
@@ -522,6 +551,14 @@ test("updating without an explicit System image preserves the installed reposito
   expect(result.status).toBe(0);
   expect(result.output).toContain("DOCKER pull ghcr.io/oerd/agents-in-the-cloud-system:latest");
   expect(result.output).not.toContain("DOCKER pull ghcr.io/lucasmeijer/agents-in-the-cloud-system:latest");
+});
+
+test("updating a fork installation follows its Update channel in the installed repository", () => {
+  for (const installedSystemImage of ["ghcr.io/oerd/agents-in-the-cloud-system:latest", `ghcr.io/oerd/agents-in-the-cloud-system@sha256:${"4".repeat(64)}`]) {
+    const result = run({ installed: true, channel: "stable", installedSystemImage });
+    expect(result.status).toBe(0);
+    expect(result.output).toContain("DOCKER pull ghcr.io/oerd/agents-in-the-cloud-system:stable");
+  }
 });
 
 test("help is available even with an invalid ambient owner", () => {
