@@ -6,6 +6,7 @@ import { Value } from "typebox/value";
 import { imageRepository, ownerFromRepository, upstreamImageRepository } from "../packages/core/src/ghcr.ts";
 import { authenticateRegistry, commandRunner, ensureBuilders, inspectImage, inspectPlatform, platformLabels, platforms, type Run } from "./release-support.ts";
 import { prepareReleaseNotes, publishReleaseNotes, readReleaseNotes } from "./release-notes.ts";
+import { releaseNotesRepository } from "../packages/update/src/server/release-history.ts";
 import { parseSystemVersion, requiredSystemVersionLabel, systemVersionLabel } from "../packages/shared/src/system-version.ts";
 import { acquireReleaseLock } from "./release-lock.ts";
 
@@ -150,7 +151,7 @@ export async function release(options: ReturnType<typeof parseReleaseArgs>, run:
     save();
     if (!options.check) {
       phase("Reserve stable release notes on GitHub");
-      await prepareReleaseNotes(run, notes, status.commit);
+      await prepareReleaseNotes(run, notes, status.commit, releaseNotesRepository(image));
       status.releaseNotes.state = "reserved";
       save();
     }
@@ -197,7 +198,7 @@ export async function release(options: ReturnType<typeof parseReleaseArgs>, run:
   await promoteChannels(run, status, save, image);
   if (notes) {
     phase("Publish stable release notes on GitHub");
-    await publishReleaseNotes(run, notes, status.commit, status.digest);
+    await publishReleaseNotes(run, notes, status.commit, status.digest, releaseNotesRepository(image));
     status.releaseNotes!.state = "published";
     save();
   }

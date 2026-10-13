@@ -205,7 +205,7 @@ export class UpdateManager {
 
   async releaseHistory() {
     if (!this.runtime?.currentRevision || !this.target?.revision) throw new Error("This installation or update does not identify its code revision, so we can’t show the changes between them.");
-    return await (this.deps.fetchReleaseHistory ?? fetchReleaseHistory)(this.runtime.currentRevision, this.target.revision);
+    return await (this.deps.fetchReleaseHistory ?? fetchReleaseHistory)(this.runtime.repository, this.runtime.currentRevision, this.target.revision);
   }
 
   dismissInstaller(): void {
