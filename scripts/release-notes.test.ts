@@ -5,7 +5,6 @@ import { parseReleaseBody } from "../packages/update/src/server/release-history.
 import type { Run } from "./release-support.ts";
 
 const revision = "a".repeat(40), digest = `sha256:${"b".repeat(64)}`;
-const githubRepository = "lucasmeijer/AgentsInTheCloud";
 const notes = { sourceRevision: revision, id: "2026-08-03-improvements", path: "release_notes/2026-08-03-improvements.md", notes: "# Improvements\n\n## Bugfixes\n- Moving tabs keeps terminals running." };
 interface ReleaseFixture { id: number; tag_name: string; target_commitish: string; body: string; draft: boolean; }
 type GithubFixture = ReleaseFixture | ReleaseFixture[] | { object: { type: string; sha: string } } | undefined;
@@ -52,49 +51,41 @@ test("reads notes from the exact release commit, not the working directory", asy
 
 test("reserves a hidden draft, publishes the exact association, and safely reuses it on retry", async () => {
   const server = github();
-  await prepareReleaseNotes(server.run, notes, revision, githubRepository);
+  await prepareReleaseNotes(server.run, notes, revision);
   expect(server.release.draft).toBe(true);
-  await prepareReleaseNotes(server.run, notes, revision, githubRepository);
+  await prepareReleaseNotes(server.run, notes, revision);
   expect(server.calls.filter(call => call.method === "POST")).toHaveLength(1);
-  await publishReleaseNotes(server.run, notes, revision, digest, githubRepository);
+  await publishReleaseNotes(server.run, notes, revision, digest);
   expect(server.release.draft).toBe(false);
   expect(parseReleaseBody(server.release.body).record).toEqual({ id: notes.id, notesPath: notes.path, revision, notesRevision: revision, digest });
-  await prepareReleaseNotes(server.run, notes, revision, githubRepository);
-  await publishReleaseNotes(server.run, notes, revision, digest, githubRepository);
+  await prepareReleaseNotes(server.run, notes, revision);
+  await publishReleaseNotes(server.run, notes, revision, digest);
   expect(server.calls.filter(call => call.method === "PATCH")).toHaveLength(1);
 });
 
 test("reusing an ID for a different revision, notes, digest or tag fails", async () => {
   const server = github();
-  await prepareReleaseNotes(server.run, notes, revision, githubRepository);
-  await expect(prepareReleaseNotes(server.run, notes, "c".repeat(40), githubRepository)).rejects.toThrow("another revision");
-  await expect(prepareReleaseNotes(server.run, { ...notes, notes: "different" }, revision, githubRepository)).rejects.toThrow("do not match");
-  await publishReleaseNotes(server.run, notes, revision, digest, githubRepository);
-  await expect(publishReleaseNotes(server.run, notes, revision, `sha256:${"c".repeat(64)}`, githubRepository)).rejects.toThrow("different image digest");
+  await prepareReleaseNotes(server.run, notes, revision);
+  await expect(prepareReleaseNotes(server.run, notes, "c".repeat(40))).rejects.toThrow("another revision");
+  await expect(prepareReleaseNotes(server.run, { ...notes, notes: "different" }, revision)).rejects.toThrow("do not match");
+  await publishReleaseNotes(server.run, notes, revision, digest);
+  await expect(publishReleaseNotes(server.run, notes, revision, `sha256:${"c".repeat(64)}`)).rejects.toThrow("different image digest");
   server.setTag("d".repeat(40));
-  await expect(prepareReleaseNotes(server.run, notes, revision, githubRepository)).rejects.toThrow("another revision");
+  await expect(prepareReleaseNotes(server.run, notes, revision)).rejects.toThrow("another revision");
 });
 
 test("GitHub network and permission failures are not treated as missing records", async () => {
-  await expect(prepareReleaseNotes(async () => ({ code: 1, stdout: "", stderr: "HTTP 403" }), notes, revision, githubRepository)).rejects.toThrow("request failed");
+  await expect(prepareReleaseNotes(async () => ({ code: 1, stdout: "", stderr: "HTTP 403" }), notes, revision)).rejects.toThrow("request failed");
 });
 
 test("a later notes commit is recorded without changing the released code tag", async () => {
   const server = github();
   const approved = { ...notes, sourceRevision: "d".repeat(40) };
-  await prepareReleaseNotes(server.run, approved, revision, githubRepository);
-  await publishReleaseNotes(server.run, approved, revision, digest, githubRepository);
+  await prepareReleaseNotes(server.run, approved, revision);
+  await publishReleaseNotes(server.run, approved, revision, digest);
   expect(server.release.target_commitish).toBe(revision);
   const record = parseReleaseBody(server.release.body).record;
   expect(record.revision).toBe(revision);
   expect(record.notesRevision).toBe(approved.sourceRevision);
-  await expect(prepareReleaseNotes(server.run, { ...approved, sourceRevision: "e".repeat(40) }, revision, githubRepository)).rejects.toThrow("do not match");
-});
-
-test("a fork publishes stable notes in its own repository", async () => {
-  const server = github();
-  await prepareReleaseNotes(server.run, notes, revision, "oerd/AgentsInTheCloud");
-  await publishReleaseNotes(server.run, notes, revision, digest, "oerd/AgentsInTheCloud");
-  expect(server.calls.length).toBeGreaterThan(0);
-  expect(server.calls.every(({ path }) => path.startsWith("repos/oerd/AgentsInTheCloud/"))).toBe(true);
+  await expect(prepareReleaseNotes(server.run, { ...approved, sourceRevision: "e".repeat(40) }, revision)).rejects.toThrow("do not match");
 });

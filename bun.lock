@@ -142,7 +142,6 @@
       "name": "@agents-in-the-cloud/claude-agent",
       "dependencies": {
         "@agents-in-the-cloud/agent": "workspace:*",
-        "@agents-in-the-cloud/builtin-agent": "workspace:*",
         "@agents-in-the-cloud/claude-cli-agent": "workspace:*",
         "@agents-in-the-cloud/cli-agent": "workspace:*",
         "@agents-in-the-cloud/core": "workspace:*",
@@ -189,7 +188,6 @@
       "name": "@agents-in-the-cloud/codex-agent",
       "dependencies": {
         "@agents-in-the-cloud/agent": "workspace:*",
-        "@agents-in-the-cloud/builtin-agent": "workspace:*",
         "@agents-in-the-cloud/cli-agent": "workspace:*",
         "@agents-in-the-cloud/core": "workspace:*",
         "@agents-in-the-cloud/design-system": "workspace:*",
@@ -527,7 +525,6 @@
   },
   "patchedDependencies": {
     "@gespenst/core@0.1.1": "patches/@gespenst%2Fcore@0.1.1.patch",
-    "@earendil-works/pi-durable@1.2.0": "patches/@earendil-works%2Fpi-durable@1.2.0.patch",
   },
   "catalog": {
     "@earendil-works/chord": "1.2.0",

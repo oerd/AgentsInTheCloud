@@ -14,7 +14,7 @@ import { agentsInTheCloudDataPath, getAgentsInTheCloudRuntimeContext, isJsonObje
 import { errorMessage } from "@agents-in-the-cloud/shared";
 import type { Api, AuthInteraction, AuthPrompt, CredentialStore, Model, ProviderHeaders } from "@earendil-works/pi-ai";
 import { InMemoryCredentialStore } from "@earendil-works/pi-ai";
-import { ModelRuntime } from "@earendil-works/pi-coding-agent";
+import { ModelRuntime, readStoredCredential } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { Value } from "typebox/value";
 
@@ -230,6 +230,11 @@ export function createPiModelRuntime(): Promise<ModelRuntime> {
   })();
 }
 
+/** The stored credential as Pi last saved it; `getAuth` refreshes it first when it is due. */
+export function readStoredPiCredential(providerId: string) {
+  return readStoredCredential(providerId, piAuthJsonPath());
+}
+
 export type PiAuthPrompt = AuthPrompt;
 
 export class ProviderCatalogueRefreshError extends Error {
@@ -252,7 +257,7 @@ async function refreshConnectedProviderCatalogue(runtime: ModelRuntime, provider
 
 function forgetSubscriptionState(provider: string): void {
   if (provider === "anthropic") anthropicUsageSource.forget();
-  if (provider === "anthropic" || provider === "openai-codex") forgetSubscriptionInference(provider);
+  if (provider === "anthropic" || provider === "openai-codex" || provider === "github-copilot") forgetSubscriptionInference(provider);
 }
 
 export async function loginPiOAuthProvider(providerId: string, interaction: AuthInteraction): Promise<void> {

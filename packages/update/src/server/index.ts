@@ -14,7 +14,8 @@ import { errorMessage, escapeHtml, turboStream, turboStreamResponse, type Settin
 import { isUpdateChannel, type UpdateChannel } from "./update-channel.ts";
 import { detectSelfUpdateRuntime, prepareUpdate, type PreparedUpdate, type PullProgress, type SelfUpdateRuntime } from "./docker.ts";
 import { fetchChannelImageMetadata, type ImageMetadata } from "./registry.ts";
-import { readStoredUpdateChannel, writeStoredUpdateChannel } from "./settings-store.ts";
+import { appRepository } from "@agents-in-the-cloud/shared/publishing";
+import { readStoredUpdateChannel, writeStoredRepositories, writeStoredUpdateChannel } from "./settings-store.ts";
 import { readSystemVersion, requestSupervisorUpdate } from "./supervisor.ts";
 
 const updateSidebarContributionId = "agents-in-the-cloud-update";
@@ -43,8 +44,9 @@ export interface UpdateManagerDeps {
   fetchReleaseHistory?: typeof fetchReleaseHistory;
   readChannel?: () => Promise<UpdateChannel | undefined>;
   writeChannel?: (channel: UpdateChannel) => Promise<void>;
+  writeRepositories?: () => Promise<void>;
   detectRuntime?: () => Promise<SelfUpdateRuntime | undefined>;
-  fetchMetadata?: (repository: string, channel: UpdateChannel) => Promise<ImageMetadata>;
+  fetchMetadata?: (channel: UpdateChannel) => Promise<ImageMetadata>;
   prepareUpdate?: (reference: string, onProgress: (progress: PullProgress) => void) => Promise<PreparedUpdate>;
   requestUpdate?: (imageId: string) => Promise<void>;
   readSystemVersion?: () => Promise<number>;
@@ -80,6 +82,8 @@ export class UpdateManager {
     if (this.runtime) this.systemVersion = await (this.deps.readSystemVersion ?? readSystemVersion)();
     this.updateSidebar();
     if (!this.runtime) return;
+    // The installer pulls System, and System pulls the app, from these repositories' channel tags.
+    await this.deps.writeRepositories?.();
     await this.checkNow().catch((error) => console.error("Update check failed", error));
     const checkForUpdate = () => void this.checkNow().catch((error) => console.error("Update check failed", error));
     if (this.deps.setInterval) {
@@ -118,7 +122,7 @@ export class UpdateManager {
     if (this.state === "idle" || this.state === "failed") this.setState("checking");
     let target: ImageMetadata;
     try {
-      target = await (this.deps.fetchMetadata ?? fetchChannelImageMetadata)(this.runtime.repository, channel);
+      target = await (this.deps.fetchMetadata ?? fetchChannelImageMetadata)(channel);
     } catch (error) {
       // A superseded channel's failures are as stale as its successful responses.
       if (generation !== this.channelGeneration || this.pullPromise || this.prepared || this.restarting) return;
@@ -176,7 +180,7 @@ export class UpdateManager {
   }
 
   private async pullNewestTarget(): Promise<void> {
-    const reference = `${this.runtime!.repository}@${this.target!.digest}`;
+    const reference = `${appRepository}@${this.target!.digest}`;
     this.prepared = undefined;
     this.setState("pulling");
     this.prepared = await (this.deps.prepareUpdate ?? prepareUpdate)(reference, (progress) => {
@@ -205,7 +209,7 @@ export class UpdateManager {
 
   async releaseHistory() {
     if (!this.runtime?.currentRevision || !this.target?.revision) throw new Error("This installation or update does not identify its code revision, so we can’t show the changes between them.");
-    return await (this.deps.fetchReleaseHistory ?? fetchReleaseHistory)(this.runtime.repository, this.runtime.currentRevision, this.target.revision);
+    return await (this.deps.fetchReleaseHistory ?? fetchReleaseHistory)(this.runtime.currentRevision, this.target.revision);
   }
 
   dismissInstaller(): void {
@@ -218,7 +222,7 @@ export class UpdateManager {
   }
 }
 
-const manager = new UpdateManager({ readChannel: readStoredUpdateChannel, writeChannel: writeStoredUpdateChannel });
+const manager = new UpdateManager({ readChannel: readStoredUpdateChannel, writeChannel: writeStoredUpdateChannel, writeRepositories: writeStoredRepositories });
 
 function renderCheckButton(state: "initial" | "in-progress"): string {
   return progressButtonHtml({

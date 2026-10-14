@@ -1,5 +1,5 @@
 * { box-sizing: border-box; margin: 0; padding: 0; }
-html { touch-action: manipulation; }
+html { touch-action: manipulation; -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
 body { background: var(--bg); color: var(--text); font-family: var(--font-sans); font-size: var(--text-body); line-height: var(--leading-standard); }
 a { color: inherit; text-decoration: none; }
 
@@ -533,8 +533,13 @@ html.software-keyboard-visible .composer.launch-composer :is(.agent-attach-row, 
 .app-settings-expanded { display: grid; gap: 16px; }
 .app-settings-content .developer-tools-action + .developer-tools-action { border-top: 0; }
 @media (max-width: 700px) {
-  .app-settings-content .settings-commit-identity { grid-template-columns: minmax(0, 1fr); }
+  .app-settings-content { padding-block: 24px; }
+  .app-settings-overview { gap: 32px; }
+  .app-settings-content .settings-sec-inline { row-gap: 16px; }
+  .app-settings-content .settings-commit-identity { grid-template-columns: minmax(0, 1fr); gap: 24px; }
+  .app-settings-content .settings-commit-identity .settings-field { gap: 12px; }
   .app-settings-content .settings-sec-dictation > form { flex-basis: auto; }
+  .app-settings-content .app-settings-disclosures { gap: 16px; }
 }
 
 .app-settings-section-frame { display: block; min-width: 0; }
@@ -604,11 +609,14 @@ html.software-keyboard-visible .composer.launch-composer :is(.agent-attach-row, 
 .agent-type-subscription { display: flex; align-items: center; justify-content: center; }
 .agent-type-subscription svg { width: 18px; height: 18px; }
 
+/* Narrow: names only; the comparison columns don't fit. */
 @container (max-width: 440px) {
   .agent-empty-choices .agent-type-picker { width:100%; grid-template-columns:16px minmax(0, 1fr); }
-  .agent-empty-choices .agent-type-picker-header { display:none; }
-  .agent-empty-choices .content-row__metadata { grid-column:2; }
-  .agent-empty-choices .agent-type-fields { grid-template-columns:minmax(0, 1fr) auto; gap:8px; }
-  .agent-empty-choices .agent-type-what { grid-column:1 / -1; overflow-wrap:normal; }
-  .agent-empty-choices .agent-type-subscriptions { display:flex; }
+  .agent-empty-choices .agent-type-picker :is(.agent-type-picker-header, .content-row__metadata) { display:none; }
+  .agent-empty-choices .agent-type-picker-header + .agent-type-choice { border-top:none; }
+}
+@media (max-width: 700px) {
+  .agent-type-picker { width:100%; grid-template-columns:16px minmax(0, 1fr); }
+  .agent-type-picker :is(.agent-type-picker-header, .content-row__metadata) { display:none; }
+  .agent-type-picker-header + .agent-type-choice { border-top:none; }
 }

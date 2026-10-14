@@ -114,24 +114,23 @@ trap 'fail "Installation could not continue. See the bootstrap log for details."
 trap 'fail "Installation interrupted."' INT TERM
 
 usage() {
-  cat <<HELP
+  cat <<'HELP'
 Usage: install.sh [options]
 
 Installs AgentsInTheCloud System, or offers actions for an existing installation.
 System replacements preserve the agents-in-the-cloud-system volume and interrupt workspaces.
 Update also installs the newest AgentsInTheCloud app on the installation's selected channel.
 
-  --system-image REF   System image (default: the installed System's repository, else
-                      ${system_repository}, on the installation's Update channel,
-                      latest for new installations)
-  --app-image REF      First-install app image (default: ${app_image})
+  --system-image REF   System image (default: the installation's System repository on its
+                      Update channel; ghcr.io/lucasmeijer/agents-in-the-cloud-system:latest
+                      for new installations)
+  --app-image REF      First-install app image (default: ghcr.io/lucasmeijer/agents-in-the-cloud:latest)
   --access-mode MODE  localhost or tailscale (default selected for this machine)
   --action ACTION     install, update, connect, or open
                       connect enables Tailscale without replacing an existing installation
   --uninstall         Permanently delete installation data (also supports Atelier System)
   -h, --help          Show help
 
-Fork installations should pass both --system-image and --app-image explicitly.
 The app image is only used when System has no persisted app selection.
 There is no migration from the previous AgentsInTheCloud installation layout.
 HELP
@@ -239,16 +238,7 @@ if [ "$action" != uninstall ] && [ "$host_os" = Linux ] && [ "$desktop" -eq 0 ];
 fi
 
 installed=0
-if docker container inspect "$system_name" >/dev/null 2>&1; then
-  installed=1
-  # Updates stay in the installed System's repository; the Update channel picks the tag.
-  if [ "$action" != uninstall ] && [ -z "$system_image" ]; then
-    installed_system_image="$(docker inspect --format '{{.Config.Image}}' "$system_name")"
-    [ -n "$installed_system_image" ] || fail "Docker returned no image for the existing AgentsInTheCloud System"
-    system_repository="${installed_system_image%%@*}"
-    case "${system_repository##*/}" in *:*) system_repository="${system_repository%:*}" ;; esac
-  fi
-fi
+if docker container inspect "$system_name" >/dev/null 2>&1; then installed=1; fi
 # Keep the legacy cleanup implementation frozen: it knows Atelier's names,
 # socket, storage, inventory contract, and DELETE ATELIER confirmation.
 if [ "$action" = uninstall ]; then
@@ -345,18 +335,25 @@ check_system_running() {
     fail "AgentsInTheCloud services are $state. Container logs are shown above."
   fi
 }
-# The app saves its Update channel in System's volume. Read it with the
-# installed System image, which is already local and includes Bun.
-read_installation_channel() {
+# The app saves its Update channel, and where its System images are published, in
+# System's volume. Read them with the installed System image, which is already local
+# and includes Bun. Apps from before they recorded a repository came from upstream.
+read_installation_settings() {
+  local settings
   installation_channel=latest
   [ "$installed" -eq 1 ] || return 0
-  installation_channel="$(docker run --rm --mount source=agents-in-the-cloud-system,target=/data,readonly --entrypoint bun \
+  settings="$(docker run --rm --mount source=agents-in-the-cloud-system,target=/data,readonly --entrypoint bun \
     "$(docker inspect --format '{{.Image}}' "$system_name")" -e '
       const file = Bun.file("/data/app/update.json");
       const settings = await file.exists() ? await file.json() : {};
-      console.log(settings.releaseChannel ?? "latest");
-    ' 2>>"$log_file")" || fail "Could not read the installation's Update channel. See the bootstrap log for details."
+      console.log(settings.releaseChannel ?? "latest", settings.systemRepository ?? "");
+    ' 2>>"$log_file")" || fail "Could not read the installation's update settings. See the bootstrap log for details."
+  read -r installation_channel installation_system_repository <<<"$settings"
   case "$installation_channel" in latest|stable) ;; *) fail "Unknown Update channel: $installation_channel" ;; esac
+  if [ -n "$installation_system_repository" ]; then
+    [[ "$installation_system_repository" =~ ^[a-z0-9.-]+(:[0-9]+)?(/[a-z0-9._-]+)+$ ]] || fail "Unknown System repository: $installation_system_repository"
+    system_repository="$installation_system_repository"
+  fi
 }
 update_app_channel() {
   local start=$SECONDS code reply last_action="" current_action description
@@ -607,7 +604,7 @@ case "$action" in
     fi
     pull_log_start="$(($(wc -l <"$log_file") + 1))"
     # System follows the app's Update channel, so stable apps only meet a System released alongside them.
-    if [ -z "$system_image" ]; then read_installation_channel; system_image="$system_repository:$installation_channel"; fi
+    if [ -z "$system_image" ]; then read_installation_settings; system_image="$system_repository:$installation_channel"; fi
     if ! run_quiet_status "Downloading AgentsInTheCloud services" docker pull "$system_image"; then
       # GHCR rejects a stale saved login even for public images, instead of falling back to anonymous access.
       if [[ "$system_image" == ghcr.io/* ]] && [[ "$(tail -n "+$pull_log_start" "$log_file")" == *denied* ]]; then

@@ -5,8 +5,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./cloud-forges": "./src/cloud-forges.ts",
-    "./json-settings": "./src/json-settings.ts",
-    "./ghcr": "./src/ghcr.ts"
+    "./json-settings": "./src/json-settings.ts"
   },
   "dependencies": {
     "typebox": "^1.0.57"

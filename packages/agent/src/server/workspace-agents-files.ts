@@ -14,3 +14,7 @@ export async function loadWorkspaceAgentsFiles(workspaceId: string, { includeRoo
 
   return agentsFiles;
 }
+
+export function formatProjectInstructions(file: { path: string; content: string }): string {
+  return `# Project instructions: ${file.path}\n\n${file.content}`;
+}

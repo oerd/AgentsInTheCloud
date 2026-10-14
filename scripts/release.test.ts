@@ -7,7 +7,6 @@ import { assertChannelSystemsSupportApp, parseReleaseArgs, promoteChannels, rele
 
 const commit = "a".repeat(40);
 const digest = `sha256:${"b".repeat(64)}`;
-const appRepository = "ghcr.io/lucasmeijer/agents-in-the-cloud";
 const architectures = ["amd64", "arm64"];
 const manifest = {
   digest,
@@ -19,10 +18,9 @@ function status(stable = false): ReleaseStatus {
 }
 
 test("release only supports latest or both, plus non-publishing checks", () => {
-  expect(parseReleaseArgs([])).toEqual({ stable: false, check: false, help: false, prepare: false, image: appRepository });
-  expect(parseReleaseArgs(["--stable", "--check", "--image", "ghcr.io/oerd/team/app"])).toEqual({ stable: true, check: true, help: false, prepare: false, image: "ghcr.io/oerd/team/app" });
+  expect(parseReleaseArgs([])).toEqual({ stable: false, check: false, help: false, prepare: false });
+  expect(parseReleaseArgs(["--stable", "--check"])).toEqual({ stable: true, check: true, help: false, prepare: false });
   expect(() => parseReleaseArgs(["--channel", "stable"])).toThrow("Unknown release option");
-  expect(() => parseReleaseArgs(["--image"])).toThrow("requires a repository");
 });
 
 test("registry absence is distinct from authentication or network failure", async () => {
@@ -39,8 +37,8 @@ test("verification requires both architectures and matching revision labels", as
     const index = manifest.manifests.findIndex((entry) => args.some((arg) => arg.endsWith(entry.digest)));
     return ok(JSON.stringify({ os: "linux", architecture: architectures[index], config: { Labels: { "org.opencontainers.image.revision": commit, "eagerly-preload": JSON.stringify([`ghcr.io/lucasmeijer/agents-in-the-cloud-workspace:signature@${digest}`]) } } }));
   };
-  expect(await verifyRevision(run, "ref", commit, appRepository)).toBe(digest);
-  await expect(verifyRevision(run, "ref", "wrong-sha", appRepository)).rejects.toThrow("does not match revision");
+  expect(await verifyRevision(run, "ref", commit)).toBe(digest);
+  await expect(verifyRevision(run, "ref", "wrong-sha")).rejects.toThrow("does not match revision");
 });
 
 test("an app channel only moves when that channel's System supports the app", async () => {
@@ -57,22 +55,11 @@ test("an app channel only moves when that channel's System supports the app", as
     const labels = channel ? { "org.agents-in-the-cloud.system-version": versions[channel]! } : { "org.agents-in-the-cloud.required-system-version": versions.app };
     return ok(JSON.stringify({ os: "linux", architecture: "amd64", config: { Labels: labels } }));
   };
-  await assertChannelSystemsSupportApp(registry({ app: "2", latest: "2" }), digest, ["latest"], appRepository);
-  await assertChannelSystemsSupportApp(registry({ app: "1", latest: "3", stable: "1" }), digest, ["latest", "stable"], appRepository);
-  await expect(assertChannelSystemsSupportApp(registry({ app: "3", latest: "2" }), digest, ["latest"], appRepository)).rejects.toThrow("needs System version 3, but ghcr.io/lucasmeijer/agents-in-the-cloud-system:latest is version 2. Publish System first: images/system/publish.sh");
-  await expect(assertChannelSystemsSupportApp(registry({ app: "2", latest: "2", stable: "1" }), digest, ["latest", "stable"], appRepository)).rejects.toThrow("agents-in-the-cloud-system:stable is version 1. Publish System first: images/system/publish.sh --stable");
-  await expect(assertChannelSystemsSupportApp(registry({ app: "1", latest: "1" }), digest, ["latest", "stable"], appRepository)).rejects.toThrow("agents-in-the-cloud-system:stable isn't published, but stable installations need it. Publish System first: images/system/publish.sh --stable");
-});
-
-test("a fork app checks System in its own owner's repository", async () => {
-  const inspected: string[] = [];
-  const run: Run = async (args) => {
-    inspected.push(args[4]!);
-    if (args.includes("{{json .Manifest}}")) return args[4]!.includes("-system:") ? { code: 1, stdout: "", stderr: "ERROR: manifest unknown" } : ok(JSON.stringify(manifest));
-    return ok(JSON.stringify({ os: "linux", architecture: "amd64", config: { Labels: {} } }));
-  };
-  await expect(assertChannelSystemsSupportApp(run, digest, ["latest"], "ghcr.io/oerd/agents-in-the-cloud")).rejects.toThrow("ghcr.io/oerd/agents-in-the-cloud-system:latest isn't published");
-  expect(inspected.some((ref) => ref.includes("lucasmeijer"))).toBe(false);
+  await assertChannelSystemsSupportApp(registry({ app: "2", latest: "2" }), digest, ["latest"]);
+  await assertChannelSystemsSupportApp(registry({ app: "1", latest: "3", stable: "1" }), digest, ["latest", "stable"]);
+  await expect(assertChannelSystemsSupportApp(registry({ app: "3", latest: "2" }), digest, ["latest"])).rejects.toThrow("needs System version 3, but ghcr.io/lucasmeijer/agents-in-the-cloud-system:latest is version 2. Publish System first: images/system/publish.sh");
+  await expect(assertChannelSystemsSupportApp(registry({ app: "2", latest: "2", stable: "1" }), digest, ["latest", "stable"])).rejects.toThrow("agents-in-the-cloud-system:stable is version 1. Publish System first: images/system/publish.sh --stable");
+  await expect(assertChannelSystemsSupportApp(registry({ app: "1", latest: "1" }), digest, ["latest", "stable"])).rejects.toThrow("agents-in-the-cloud-system:stable isn't published, but stable installations need it. Publish System first: images/system/publish.sh --stable");
 });
 
 test("promotion uses the verified digest and reports partial success", async () => {
@@ -83,7 +70,7 @@ test("promotion uses the verified digest and reports partial success", async () 
     calls.push(args);
     if (args.includes("create") && args.some((arg) => arg.endsWith(":stable"))) throw new Error("push failed");
     return ok(JSON.stringify(manifest));
-  }, current, () => saves.push(JSON.stringify(current.channels)), appRepository)).rejects.toThrow("push failed");
+  }, current, () => saves.push(JSON.stringify(current.channels)))).rejects.toThrow("push failed");
   expect(current.channels).toEqual({ latest: "published", stable: "failed" });
   expect(calls.filter((args) => args.includes("create")).every((args) => args.at(-1) === `ghcr.io/lucasmeijer/agents-in-the-cloud@${digest}`)).toBe(true);
   expect(saves.length).toBe(4);
@@ -95,18 +82,18 @@ test("both channels are promoted in order on success", async () => {
   await promoteChannels(async (args) => {
     if (args.includes("create")) channels.push(args[args.indexOf("--tag") + 1]!);
     return ok(JSON.stringify(manifest));
-  }, current, () => {}, appRepository);
+  }, current, () => {});
   expect(channels).toEqual(["ghcr.io/lucasmeijer/agents-in-the-cloud:latest", "ghcr.io/lucasmeijer/agents-in-the-cloud:stable"]);
   expect(current.channels).toEqual({ latest: "published", stable: "published" });
 });
 
 test("promotion fails if registry readback differs", async () => {
   const current = status();
-  await expect(promoteChannels(async () => ok(JSON.stringify({ ...manifest, digest: `sha256:${"c".repeat(64)}` })), current, () => {}, appRepository)).rejects.toThrow("digest differs");
+  await expect(promoteChannels(async () => ok(JSON.stringify({ ...manifest, digest: `sha256:${"c".repeat(64)}` })), current, () => {})).rejects.toThrow("digest differs");
   expect(current.channels.latest).toBe("failed");
 });
 
-async function scenario(options: { check?: boolean; exists?: boolean; moved?: boolean; buildFailure?: boolean; sameArch?: boolean; localArm?: boolean; badDriver?: boolean; missingHelper?: boolean; image?: string; stable?: boolean; failStable?: boolean; failNotesPublication?: boolean; prepare?: boolean; sourceRevision?: string; revision?: string; changedPaths?: string }) {
+async function scenario(options: { check?: boolean; exists?: boolean; rewritten?: boolean; buildFailure?: boolean; sameArch?: boolean; localArm?: boolean; badDriver?: boolean; missingHelper?: boolean; stable?: boolean; failStable?: boolean; failNotesPublication?: boolean; prepare?: boolean; sourceRevision?: string; revision?: string; changedPaths?: string }) {
   const directory = mkdtempSync(join(tmpdir(), "agents-in-the-cloud-release-test-"));
   const calls: { args: string[]; cwd?: string }[] = [];
   let uploaded = options.exists ?? false;
@@ -137,7 +124,7 @@ async function scenario(options: { check?: boolean; exists?: boolean; moved?: bo
       if (options.failStable && args.includes("create") && args.some(arg => arg.endsWith(":stable"))) throw new Error("stable promotion failed");
       if (args[0] === "git" && args[1] === "rev-parse") return ok(options.sourceRevision ?? commit);
       if (args[0] === "git" && args[1] === "diff") return ok(options.changedPaths ?? "");
-      if (args[0] === "git" && args[1] === "ls-remote") return ok(`${options.moved ? "new-commit" : options.sourceRevision ?? commit}\trefs/heads/main`);
+      if (args[0] === "git" && args[1] === "merge-base" && args[3] === commit && args[4] === "FETCH_HEAD") return { code: options.rewritten ? 1 : 0, stdout: "", stderr: "" };
       if (args.includes("context") && args.includes("show")) return ok("default");
       if (args.includes("{{json .}}")) {
         const local = args[args.indexOf("--context") + 1] === "default";
@@ -160,7 +147,7 @@ async function scenario(options: { check?: boolean; exists?: boolean; moved?: bo
       return ok();
     };
     let error: unknown;
-    const releaseOptions = parseReleaseArgs([...(options.stable ? ["--stable", "--notes", "release_notes/2026-08-03-improvements.md"] : []), ...(options.image ? ["--image", options.image] : [])]);
+    const releaseOptions = parseReleaseArgs(options.stable ? ["--stable", "--notes", "release_notes/2026-08-03-improvements.md"] : []);
     releaseOptions.check = current.check;
     releaseOptions.prepare = options.prepare ?? false;
     if (options.revision) releaseOptions.revision = options.revision;
@@ -201,7 +188,7 @@ test("new commit is built in an isolated checkout with no latest tag before veri
   const { calls, current, error } = await scenario({});
   expect(error).toBeUndefined();
   expect(current.state).toBe("published");
-  expect(calls.find(({ args }) => args.includes("ls-remote"))!.args).toEqual(["git", "ls-remote", "origin", "refs/heads/main"]);
+  expect(calls.some(({ args }) => args.join(" ") === `git merge-base --is-ancestor ${commit} FETCH_HEAD`)).toBe(true);
   expect(calls.flatMap(({ args }) => args).some(arg => /^ghcr\.io\/lucasmeijer\/atelier(?=[:@])/.test(arg) || arg === "ghcr.io/lucasmeijer/agents-in-the-cloud:stable")).toBe(false);
   const build = calls.find(({ args }) => args[0] === "bun")!;
   expect(build.cwd).toEndWith("/source");
@@ -212,29 +199,15 @@ test("new commit is built in an isolated checkout with no latest tag before veri
   expect(calls.findIndex(({ args }) => args.includes("{{json .Image}}"))).toBeLessThan(calls.findIndex(({ args }) => args.includes("--tag") && args.includes("ghcr.io/lucasmeijer/agents-in-the-cloud:latest")));
 });
 
-test("an explicit nested repository selects the app publishing target and login owner", async () => {
-  const image = "ghcr.io/oerd/team/agents-in-the-cloud-dev";
-  const { calls, error } = await scenario({ image });
-  expect(error).toBeUndefined();
-  const login = calls.find(({ args }) => args.includes("login"));
-  expect(login?.args).toContain("--username");
-  expect(login?.args).toContain("oerd");
-  const build = calls.find(({ args }) => args[0] === "bun");
-  expect(build?.args).toContain("--image");
-  expect(build?.args).toContain(image);
-  expect(calls.some(({ args }) => args.includes(`${image}:latest`))).toBe(true);
-  expect(calls.some(({ args }) => args.includes("ghcr.io/lucasmeijer/agents-in-the-cloud:latest"))).toBe(false);
-});
-
 test("retry reuses uploaded commit instead of rebuilding", async () => {
   const { calls, error } = await scenario({ exists: true });
   expect(error).toBeUndefined();
   expect(calls.some(({ args }) => args[0] === "bun" || args.includes("worktree"))).toBe(false);
 });
 
-test("main branch moving prevents all channel updates", async () => {
-  const { calls, error } = await scenario({ exists: true, moved: true });
-  expect(String(error)).toContain("origin/main moved");
+test("rewritten main history prevents all channel updates", async () => {
+  const { calls, error } = await scenario({ exists: true, rewritten: true });
+  expect(String(error)).toContain("no longer contains");
   expect(calls.some(({ args }) => args.includes("imagetools") && args.includes("create"))).toBe(false);
 });
 
@@ -309,7 +282,7 @@ test(`image build CLI pairs images from its working checkout, not its tooling ch
 for (const preload of [undefined, "[]", "null", "{}", "[42]", JSON.stringify(["workspace:tag"])]) {
   test(`release rejects missing or unpinned workspace: ${preload}`, async () => {
     const run: Run = async args => args.includes("{{json .Manifest}}") ? ok(JSON.stringify(manifest)) : ok(JSON.stringify({os:"linux", architecture:"amd64", config:{Labels:{"org.opencontainers.image.revision":commit, "eagerly-preload":preload}}}));
-    await expect(verifyRevision(run, "ref", commit, appRepository)).rejects.toThrow("digest-pinned workspace");
+    await expect(verifyRevision(run, "ref", commit)).rejects.toThrow("digest-pinned workspace");
   });
 }
 

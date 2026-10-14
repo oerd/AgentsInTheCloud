@@ -5,12 +5,13 @@ import { usageWindowTiming, type PacedUsageWindow } from "./usage-window.ts";
 import { fetchCodexSubscriptionUsage } from "./codex-subscription-usage.ts";
 import { fetchXaiSubscriptionUsage } from "./xai-subscription-usage.ts";
 import { fetchRadiusUsage } from "./radius-usage.ts";
-import { cheapestProviderModel, createPiModelRuntime } from "./pi-config-models.ts";
+import { fetchGitHubCopilotSubscriptionUsage } from "./github-copilot-subscription-usage.ts";
+import { cheapestProviderModel, createPiModelRuntime, readStoredPiCredential } from "./pi-config-models.ts";
 import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
 
 // Only providers with implemented subscription adapters appear in the overview.
 // Radius reports a credit balance without allowance windows, so it never drives the usage button.
-export const supportedUsageProviders = [{ id: "anthropic", label: "Anthropic" }, { id: "openai-codex", label: "ChatGPT / Codex" }, { id: "xai", label: "xAI" }, { id: "radius", label: "Radius" }] as const;
+export const supportedUsageProviders = [{ id: "anthropic", label: "Anthropic" }, { id: "openai-codex", label: "ChatGPT / Codex" }, { id: "xai", label: "xAI" }, { id: "radius", label: "Radius" }, { id: "github-copilot", label: "GitHub Copilot" }] as const;
 export type UsageProvider = typeof supportedUsageProviders[number];
 type UsageRequest = { runtime: ModelRuntime; refresh: boolean };
 const subscriptionAdapters = {
@@ -18,6 +19,12 @@ const subscriptionAdapters = {
   "openai-codex": (token) => fetchCodexSubscriptionUsage(token),
   xai: (token) => fetchXaiSubscriptionUsage(token),
   radius: (token) => fetchRadiusUsage(token),
+  // The usage check needs the GitHub sign-in behind the Copilot token, which getAuth has just refreshed.
+  "github-copilot": async () => {
+    const credential = readStoredPiCredential("github-copilot");
+    if (credential?.type !== "oauth") throw new SubscriptionUsageError("GitHub Copilot credentials are unavailable. Reconnect GitHub Copilot.");
+    return fetchGitHubCopilotSubscriptionUsage(credential);
+  },
   anthropic: (token, { runtime, refresh }) => {
     const model = cheapestProviderModel(runtime, "anthropic");
     if (!model) throw new Error("Anthropic has no models to check subscription usage with.");
