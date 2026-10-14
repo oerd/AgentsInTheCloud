@@ -8,6 +8,7 @@ import type { ImageMetadata } from "../../src/server/registry.ts";
 import { readStoredUpdateChannel, writeStoredUpdateChannel } from "../../src/server/settings-store.ts";
 import { readSystemVersion, requestSupervisorUpdate } from "../../src/server/supervisor.ts";
 import { requiredSystemVersion } from "@agents-in-the-cloud/shared/system-version";
+import { appRepository } from "@agents-in-the-cloud/shared/publishing";
 
 function context() {
   const sidebar: string[] = [];
@@ -47,7 +48,7 @@ function deferred<T = void>() {
 const oldDigest = `sha256:${"a".repeat(64)}`;
 const newDigest = `sha256:${"b".repeat(64)}`;
 const newerDigest = `sha256:${"c".repeat(64)}`;
-const exact = `ghcr.io/lucasmeijer/agents-in-the-cloud@${newDigest}`;
+const exact = `${appRepository}@${newDigest}`;
 function manager(extra: UpdateManagerDeps = {}) {
   return new UpdateManager({
     detectRuntime: async () => ({ currentDigest: oldDigest }),

@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { type Run } from "../../scripts/release-support.ts";
 import { publishSystem } from "./publish.ts";
 import { systemVersion } from "../../packages/shared/src/system-version.ts";
+import { systemRepository } from "../../packages/shared/src/publishing.ts";
 
 const revision = "a".repeat(40);
 const digest = (arch: string) => `sha256:${(arch === "amd64" ? "1" : "2").repeat(64)}`;
@@ -60,9 +61,9 @@ for (const local of ["amd64", "arm64"]) {
       expect(args).toContain(`org.agents-in-the-cloud.system-version=${systemVersion}`);
     }
     const merge = calls.find(({ args }) => args.includes("imagetools") && args.includes("create"))!;
-    expect(merge.args.slice(-2)).toEqual(["amd64", "arm64"].map(arch => `ghcr.io/lucasmeijer/agents-in-the-cloud-system@${digest(arch)}`));
+    expect(merge.args.slice(-2)).toEqual(["amd64", "arm64"].map(arch => `${systemRepository}@${digest(arch)}`));
     const promote = calls.findLast(({ args }) => args.includes("imagetools") && args.includes("create"))!;
-    expect(promote.args.slice(-3)).toEqual(["--tag", "ghcr.io/lucasmeijer/agents-in-the-cloud-system:latest", `ghcr.io/lucasmeijer/agents-in-the-cloud-system@sha256:${"3".repeat(64)}`]);
+    expect(promote.args.slice(-3)).toEqual(["--tag", `${systemRepository}:latest`, `${systemRepository}@sha256:${"3".repeat(64)}`]);
     expect(calls.some(({ args }) => args.some(arg => /binfmt|qemu|:stable/.test(arg)))).toBe(false);
     expect(calls.find(({ args }) => args.includes("login"))?.input).toBe("test-package-token");
     expect(calls.flatMap(call => call.args)).not.toContain("test-package-token");
@@ -72,8 +73,8 @@ for (const local of ["amd64", "arm64"]) {
 test("--stable also moves stable to the verified combined digest", async () => {
   const { calls, error } = await scenario({ stable: true });
   expect(error).toBeUndefined();
-  const promotions = calls.filter(({ args }) => args.includes("imagetools") && args.includes("create") && args.at(-1) === `ghcr.io/lucasmeijer/agents-in-the-cloud-system@sha256:${"3".repeat(64)}`);
-  expect(promotions.map(({ args }) => args.at(-2))).toEqual(["ghcr.io/lucasmeijer/agents-in-the-cloud-system:latest", "ghcr.io/lucasmeijer/agents-in-the-cloud-system:stable"]);
+  const promotions = calls.filter(({ args }) => args.includes("imagetools") && args.includes("create") && args.at(-1) === `${systemRepository}@sha256:${"3".repeat(64)}`);
+  expect(promotions.map(({ args }) => args.at(-2))).toEqual([`${systemRepository}:latest`, `${systemRepository}:stable`]);
 });
 
 test("check probes both native builders without registry authentication or writes", async () => {

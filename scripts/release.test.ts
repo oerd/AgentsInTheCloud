@@ -4,6 +4,7 @@ import { chmodSync, cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } f
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { assertChannelSystemsSupportApp, parseReleaseArgs, promoteChannels, release, verifyRevision, type ReleaseStatus } from "./release.ts";
+import { appRepository, systemRepository } from "../packages/shared/src/publishing.ts";
 
 const commit = "a".repeat(40);
 const digest = `sha256:${"b".repeat(64)}`;
@@ -35,7 +36,7 @@ test("verification requires both architectures and matching revision labels", as
   const run: Run = async (args) => {
     if (args.includes("{{json .Manifest}}")) return ok(JSON.stringify(manifest));
     const index = manifest.manifests.findIndex((entry) => args.some((arg) => arg.endsWith(entry.digest)));
-    return ok(JSON.stringify({ os: "linux", architecture: architectures[index], config: { Labels: { "org.opencontainers.image.revision": commit, "eagerly-preload": JSON.stringify([`ghcr.io/lucasmeijer/agents-in-the-cloud-workspace:signature@${digest}`]) } } }));
+    return ok(JSON.stringify({ os: "linux", architecture: architectures[index], config: { Labels: { "org.opencontainers.image.revision": commit, "eagerly-preload": JSON.stringify([`${appRepository}-workspace:signature@${digest}`]) } } }));
   };
   expect(await verifyRevision(run, "ref", commit)).toBe(digest);
   await expect(verifyRevision(run, "ref", "wrong-sha")).rejects.toThrow("does not match revision");
@@ -57,7 +58,7 @@ test("an app channel only moves when that channel's System supports the app", as
   };
   await assertChannelSystemsSupportApp(registry({ app: "2", latest: "2" }), digest, ["latest"]);
   await assertChannelSystemsSupportApp(registry({ app: "1", latest: "3", stable: "1" }), digest, ["latest", "stable"]);
-  await expect(assertChannelSystemsSupportApp(registry({ app: "3", latest: "2" }), digest, ["latest"])).rejects.toThrow("needs System version 3, but ghcr.io/lucasmeijer/agents-in-the-cloud-system:latest is version 2. Publish System first: images/system/publish.sh");
+  await expect(assertChannelSystemsSupportApp(registry({ app: "3", latest: "2" }), digest, ["latest"])).rejects.toThrow(`needs System version 3, but ${systemRepository}:latest is version 2. Publish System first: images/system/publish.sh`);
   await expect(assertChannelSystemsSupportApp(registry({ app: "2", latest: "2", stable: "1" }), digest, ["latest", "stable"])).rejects.toThrow("agents-in-the-cloud-system:stable is version 1. Publish System first: images/system/publish.sh --stable");
   await expect(assertChannelSystemsSupportApp(registry({ app: "1", latest: "1" }), digest, ["latest", "stable"])).rejects.toThrow("agents-in-the-cloud-system:stable isn't published, but stable installations need it. Publish System first: images/system/publish.sh --stable");
 });
@@ -72,7 +73,7 @@ test("promotion uses the verified digest and reports partial success", async () 
     return ok(JSON.stringify(manifest));
   }, current, () => saves.push(JSON.stringify(current.channels)))).rejects.toThrow("push failed");
   expect(current.channels).toEqual({ latest: "published", stable: "failed" });
-  expect(calls.filter((args) => args.includes("create")).every((args) => args.at(-1) === `ghcr.io/lucasmeijer/agents-in-the-cloud@${digest}`)).toBe(true);
+  expect(calls.filter((args) => args.includes("create")).every((args) => args.at(-1) === `${appRepository}@${digest}`)).toBe(true);
   expect(saves.length).toBe(4);
 });
 
@@ -83,7 +84,7 @@ test("both channels are promoted in order on success", async () => {
     if (args.includes("create")) channels.push(args[args.indexOf("--tag") + 1]!);
     return ok(JSON.stringify(manifest));
   }, current, () => {});
-  expect(channels).toEqual(["ghcr.io/lucasmeijer/agents-in-the-cloud:latest", "ghcr.io/lucasmeijer/agents-in-the-cloud:stable"]);
+  expect(channels).toEqual([`${appRepository}:latest`, `${appRepository}:stable`]);
   expect(current.channels).toEqual({ latest: "published", stable: "published" });
 });
 
@@ -138,7 +139,7 @@ async function scenario(options: { check?: boolean; exists?: boolean; rewritten?
       }
       if (args.includes("{{json .Image}}")) {
         const index = manifest.manifests.findIndex((entry) => args.some((arg) => arg.endsWith(entry.digest)));
-        return ok(JSON.stringify({ os: "linux", architecture: architectures[index], config: { Labels: { "org.opencontainers.image.revision": commit, "eagerly-preload": JSON.stringify([`ghcr.io/lucasmeijer/agents-in-the-cloud-workspace:signature@${digest}`]) } } }));
+        return ok(JSON.stringify({ os: "linux", architecture: architectures[index], config: { Labels: { "org.opencontainers.image.revision": commit, "eagerly-preload": JSON.stringify([`${appRepository}-workspace:signature@${digest}`]) } } }));
       }
       if (args[0] === "bun") {
         if (options.buildFailure) throw new Error("build failed");
@@ -189,14 +190,14 @@ test("new commit is built in an isolated checkout with no latest tag before veri
   expect(error).toBeUndefined();
   expect(current.state).toBe("published");
   expect(calls.some(({ args }) => args.join(" ") === `git merge-base --is-ancestor ${commit} FETCH_HEAD`)).toBe(true);
-  expect(calls.flatMap(({ args }) => args).some(arg => /^ghcr\.io\/lucasmeijer\/atelier(?=[:@])/.test(arg) || arg === "ghcr.io/lucasmeijer/agents-in-the-cloud:stable")).toBe(false);
+  expect(calls.flatMap(({ args }) => args).some(arg => /^ghcr\.io\/lucasmeijer\/atelier(?=[:@])/.test(arg) || arg === `${appRepository}:stable`)).toBe(false);
   const build = calls.find(({ args }) => args[0] === "bun")!;
   expect(build.cwd).toEndWith("/source");
   expect(build.args).toContain("--no-latest");
   expect(build.args).toContain(`sha-${commit}`);
   expect(build.args).toContain("--builder");
   expect(calls.some(({ args }) => args.includes("--stable"))).toBe(false);
-  expect(calls.findIndex(({ args }) => args.includes("{{json .Image}}"))).toBeLessThan(calls.findIndex(({ args }) => args.includes("--tag") && args.includes("ghcr.io/lucasmeijer/agents-in-the-cloud:latest")));
+  expect(calls.findIndex(({ args }) => args.includes("{{json .Image}}"))).toBeLessThan(calls.findIndex(({ args }) => args.includes("--tag") && args.includes(`${appRepository}:latest`)));
 });
 
 test("retry reuses uploaded commit instead of rebuilding", async () => {
@@ -258,15 +259,15 @@ test(`image build CLI pairs images from its working checkout, not its tooling ch
       expect(args.some((arg) => arg.endsWith(":latest") || arg.endsWith(":stable"))).toBe(false);
     }
     const appBuild = builds[split ? 2 : 1]!;
-    expect(appBuild).toContain(`ghcr.io/lucasmeijer/agents-in-the-cloud:sha-test${split ? "-amd64" : ""}`);
+    expect(appBuild).toContain(`${appRepository}:sha-test${split ? "-amd64" : ""}`);
     const workspaceArg = appBuild.find(arg => arg.startsWith("ATELIER_DEFAULT_WORKSPACE_IMAGE="))!;
-    expect(workspaceArg).toBe(`ATELIER_DEFAULT_WORKSPACE_IMAGE=ghcr.io/lucasmeijer/agents-in-the-cloud-workspace:${expectedSignature}@${digest}`);
-    expect(builds[0]).toContain(`ghcr.io/lucasmeijer/agents-in-the-cloud-workspace:${expectedSignature}${split ? "-amd64" : ""}`);
+    expect(workspaceArg).toBe(`ATELIER_DEFAULT_WORKSPACE_IMAGE=${appRepository}-workspace:${expectedSignature}@${digest}`);
+    expect(builds[0]).toContain(`${appRepository}-workspace:${expectedSignature}${split ? "-amd64" : ""}`);
     expect(appBuild).toContain(`ATELIER_EAGERLY_PRELOAD=${JSON.stringify([workspaceArg.split("=")[1]])}`);
     if (split) {
       const merges = commands.filter(args => args.includes("imagetools") && args.includes("create"));
       expect(merges).toHaveLength(2);
-      expect(merges[1]).toContain("ghcr.io/lucasmeijer/agents-in-the-cloud:sha-test");
+      expect(merges[1]).toContain(`${appRepository}:sha-test`);
       for (const merge of merges) {
         expect(merge.slice(-2).every(ref => ref.endsWith(`@${digest}`))).toBe(true);
       }

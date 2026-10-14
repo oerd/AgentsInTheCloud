@@ -4,8 +4,9 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { detectSelfUpdateRuntime, prepareUpdate, pruneUnusedAgentsInTheCloudImages, pullImageReference, type DockerImage, type PullProgress, type PullLayerProgress } from "../../src/server/docker.ts";
+import { appRepository } from "@agents-in-the-cloud/shared/publishing";
 
-const app = `ghcr.io/lucasmeijer/agents-in-the-cloud@sha256:${"a".repeat(64)}`;
+const app = `${appRepository}@sha256:${"a".repeat(64)}`;
 const workspace = `ghcr.io/lucasmeijer/workspace@sha256:${"b".repeat(64)}`;
 const appImage: DockerImage = { Id: "sha256:app" };
 

@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { parseWwwAuthenticate, selectManifestFromIndex, fetchChannelImageMetadata, resolveImage } from "../../src/server/registry.ts";
+import { appRepository } from "@agents-in-the-cloud/shared/publishing";
 describe("registry helpers", () => {
   test("parses bearer auth challenge", () => {
     expect(parseWwwAuthenticate('Bearer realm="https://ghcr.io/token",service="ghcr.io",scope="repository:lucasmeijer/agents-in-the-cloud:pull"')).toEqual({
@@ -139,10 +140,10 @@ test("latest discovery only requests the new product's latest tag", async () => 
   const fetcher = async (input: URL | RequestInfo) => {
     const url = String(input);
     calls.push(url);
-    if (url === "https://ghcr.io/v2/lucasmeijer/agents-in-the-cloud/manifests/latest") {
+    if (url === `https://ghcr.io/v2/${appRepository.slice("ghcr.io/".length)}/manifests/latest`) {
       return Response.json({ config: { digest: "sha256:latest-config" }, layers: [] }, { headers: { "docker-content-digest": "sha256:latest-manifest" } });
     }
-    if (url === "https://ghcr.io/v2/lucasmeijer/agents-in-the-cloud/blobs/sha256:latest-config") {
+    if (url === `https://ghcr.io/v2/${appRepository.slice("ghcr.io/".length)}/blobs/sha256:latest-config`) {
       return Response.json({ os: "linux", architecture: process.arch === "arm64" ? "arm64" : "amd64", config: { Labels: { "org.opencontainers.image.revision": "latest-revision" } } });
     }
     throw new Error(`unexpected fetch ${url}`);
