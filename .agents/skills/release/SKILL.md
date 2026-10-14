@@ -74,7 +74,7 @@ bun run release --stable --revision "$CODE_SHA" \
   --notes release_notes/YYYY-MM-DD-short-description.md
 ```
 
-Run long commands in tmux and present live progress. This command reads notes from the fetched `origin/main` commit, reuses/verifies the prepared code image, reserves a hidden GitHub draft, confirms main has not moved during publication, promotes latest and stable by digest, and publishes the approved notes.
+Run long commands in tmux and present live progress. This command reads notes from the fetched `origin/main` commit, reuses/verifies the prepared code image, reserves a hidden GitHub draft, confirms main still contains the release commit, promotes latest and stable by digest, and publishes the approved notes.
 
 The GitHub tag `stable-<release-id>` points at **CODE_SHA**, not the later notes-only commit. Publication metadata records the code revision, notes revision, source path, and image digest. The Markdown file is the repo history; the GitHub Release is the published history fetched by “What’s new.” Latest users see crossed stable milestones and a comparison for changes beyond them; latest releases need no handwritten notes.
 

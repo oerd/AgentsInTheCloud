@@ -1,12 +1,8 @@
 import { Type, type TSchema, type Static } from "typebox";
 import { Value } from "typebox/value";
-import { ownerFromRepository } from "@agents-in-the-cloud/core/ghcr";
 import { type HttpFetcher } from "./registry.ts";
+import { githubRepository } from "@agents-in-the-cloud/shared/publishing";
 
-/** Stable release notes are GitHub Releases in the app image owner's AgentsInTheCloud repository. */
-export function releaseNotesRepository(appRepository: string): string {
-  return `${ownerFromRepository(appRepository)}/AgentsInTheCloud`;
-}
 export const releaseTagPrefix = "stable-";
 const marker = "agents-in-the-cloud-release";
 const recordSchema = Type.Object({
@@ -37,10 +33,9 @@ const comparisonSchema = Type.Object({ commits: Type.Array(Type.Object({ sha: Ty
 const revisionSchema = Type.String({ pattern: "^[a-f0-9]{40}$" });
 
 /** Published stable milestones in the update's ancestry, never draft notes or unrelated branches. */
-export async function fetchReleaseHistory(appRepository: string, current: string, target: string, fetcher: HttpFetcher = fetch): Promise<{ releases: PublishedRelease[]; targetHasNotes: boolean; compareUrl: string }> {
+export async function fetchReleaseHistory(current: string, target: string, fetcher: HttpFetcher = fetch): Promise<{ releases: PublishedRelease[]; targetHasNotes: boolean; compareUrl: string }> {
   Value.Assert(revisionSchema, current);
   Value.Assert(revisionSchema, target);
-  const githubRepository = releaseNotesRepository(appRepository);
   const base = `https://api.github.com/repos/${githubRepository}`;
   async function get<T extends TSchema>(path: string, schema: T): Promise<Static<T>> {
     const response = await fetcher(`${base}/${path}`, { headers: { accept: "application/vnd.github+json" } });

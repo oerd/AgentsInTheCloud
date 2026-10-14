@@ -2,14 +2,9 @@ import { expect, test } from "bun:test";
 
 const installer = await Bun.file(new URL("./install.sh", import.meta.url)).text();
 
-function run(options: { systemState?: "restarting" | "exited"; nonRoot?: boolean; denySudo?: boolean; mac?: boolean; wsl?: boolean; installed?: boolean; old?: boolean; legacyAtelier?: boolean; legacyVolumeOnly?: boolean; legacyPreSystem?: boolean; legacyDownloadFails?: boolean; legacyDelegateFails?: boolean; pullFails?: boolean; pullDenied?: boolean; appFails?: boolean; retryUpdateRequest?: boolean; rejectUpdateRequest?: boolean; pendingHealth?: boolean; missingFilesystem?: boolean; loadable?: boolean; uninstallAnswer?: string; uninstallFails?: boolean; uninstallRequestFails?: boolean; inventoryFails?: boolean; volumeOnly?: boolean; volumeRemovalFails?: boolean; initiallyStopped?: boolean; ghcrOwner?: string; githubOwner?: string; originUrl?: string; installedSystemImage?: string; channel?: string } = {}, args: string[] = []) {
+function run(options: { systemState?: "restarting" | "exited"; nonRoot?: boolean; denySudo?: boolean; mac?: boolean; wsl?: boolean; installed?: boolean; old?: boolean; legacyAtelier?: boolean; legacyVolumeOnly?: boolean; legacyPreSystem?: boolean; legacyDownloadFails?: boolean; legacyDelegateFails?: boolean; pullFails?: boolean; pullDenied?: boolean; appFails?: boolean; retryUpdateRequest?: boolean; rejectUpdateRequest?: boolean; pendingHealth?: boolean; missingFilesystem?: boolean; loadable?: boolean; uninstallAnswer?: string; uninstallFails?: boolean; uninstallRequestFails?: boolean; inventoryFails?: boolean; volumeOnly?: boolean; volumeRemovalFails?: boolean; initiallyStopped?: boolean; channel?: string; systemRepository?: string } = {}, args: string[] = []) {
   const logPath = `/tmp/agents-in-the-cloud-install-test-${crypto.randomUUID()}.log`;
   const mock = `
-git() {
-  if [ "$1" = rev-parse ]; then return ${options.originUrl ? 0 : 1}; fi
-  if [ "$1" = remote ]; then printf '%s\n' ${JSON.stringify(options.originUrl ?? "")}; return ${options.originUrl ? 0 : 1}; fi
-  return 1
-}
 mktemp() { if [[ "$*" == *atelier-legacy-uninstall* ]]; then echo "${logPath}.legacy"; else echo "${logPath}"; fi; }
 curl() { printf 'CURL %s\\n' "$*" >&2; return ${options.legacyDownloadFails ? 22 : 0}; }
 bash() { printf 'LEGACY BASH %s\\n' "$*" >&2; return ${options.legacyDelegateFails ? 1 : 0}; }
@@ -82,9 +77,9 @@ docker() {
         printf '${options.appFails ? 'failed\\nApp health failed\\n\\n\\n\\n\\nApp exited' : 'ready\\nAgentsInTheCloud is ready\\n\\nhttps://app.example/custom-path\\n\\n\\n'}\\n'
         return
       fi ;;
-    'run --rm') printf '%s\n' ${JSON.stringify(options.channel ?? "latest")}; return 0 ;;
+    'run --rm') printf '%s %s\n' ${JSON.stringify(options.channel ?? "latest")} ${JSON.stringify(options.systemRepository ?? "")}; return 0 ;;
     'logs --tail') echo 'supervisor startup failed: io.weight unavailable';;
-    'inspect --format') if [[ "$*" == *Config.Image* ]]; then echo ${options.installedSystemImage ?? "ghcr.io/lucasmeijer/agents-in-the-cloud-system:latest"}; elif [[ "$*" == *'{{.Image}}'* ]]; then echo sha256:installed-system; elif [[ "$*" == *State.Status* ]]; then echo ${options.systemState ?? 'running'}; elif [[ "$*" == *3080/tcp* ]]; then echo 55123; else echo ${options.initiallyStopped ? "false" : "true"}; fi ;;
+    'inspect --format') if [[ "$*" == *'{{.Image}}'* ]]; then echo sha256:installed-system; elif [[ "$*" == *State.Status* ]]; then echo ${options.systemState ?? 'running'}; elif [[ "$*" == *3080/tcp* ]]; then echo 55123; else echo ${options.initiallyStopped ? "false" : "true"}; fi ;;
   esac
 }
 `;
@@ -96,12 +91,7 @@ docker() {
       'IFS= read -r -t 120 "$1" <"$prompt_input"',
       `if [ "$1" = action ]; then action=update; else answer=${JSON.stringify(options.uninstallAnswer ?? (options.installed ? "yes" : "1"))}; fi`,
     );
-  const env = { ...process.env };
-  if (options.githubOwner === undefined) delete env.GITHUB_REPOSITORY_OWNER;
-  else env.GITHUB_REPOSITORY_OWNER = options.githubOwner;
-  if (options.ghcrOwner === undefined) delete env.GHCR_OWNER;
-  else env.GHCR_OWNER = options.ghcrOwner;
-  const result = Bun.spawnSync([process.platform === "darwin" ? "/bin/bash" : "bash", "-c", mock + script, "installer", ...args], { stdin: "ignore", env });
+  const result = Bun.spawnSync([process.platform === "darwin" ? "/bin/bash" : "bash", "-c", mock + script, "installer", ...args], { stdin: "ignore" });
   const log = Bun.spawnSync(["cat", logPath]).stdout.toString();
   Bun.spawnSync(["rm", "-f", logPath, `${logPath}.checked`, `${logPath}.update-attempted`, `${logPath}.update-accepted`, `${logPath}.container-removed`, `${logPath}.volume-removed`]);
   return { status: result.exitCode, output: result.stdout.toString() + result.stderr.toString() + log };
@@ -135,6 +125,16 @@ test("updates follow the installation's Update channel for System", () => {
     expect(result.output).toContain("DOCKER run --rm --mount source=agents-in-the-cloud-system,target=/data,readonly --entrypoint bun sha256:installed-system -e");
     expect(result.output).toContain(`DOCKER pull ghcr.io/lucasmeijer/agents-in-the-cloud-system:${channel}`);
   }
+});
+
+test("updates follow the System repository the app recorded", () => {
+  const result = run({ installed: true, channel: "stable", systemRepository: "ghcr.io/someone/agents-in-the-cloud-system" });
+  expect(result.status).toBe(0);
+  expect(result.output).toContain("DOCKER pull ghcr.io/someone/agents-in-the-cloud-system:stable");
+  const malformed = run({ installed: true, systemRepository: "--help" });
+  expect(malformed.status).not.toBe(0);
+  expect(malformed.output).toContain("Unknown System repository: --help");
+  expect(malformed.output).not.toContain("DOCKER pull");
 });
 
 test("an explicit System image wins over the channel, and an unknown channel stops before changes", () => {
@@ -526,45 +526,6 @@ test("fresh installer uses latest in the separate renamed repositories", () => {
   expect(result.output).toContain("DOCKER pull ghcr.io/lucasmeijer/agents-in-the-cloud-system:latest");
   expect(result.output).toContain("--app-image ghcr.io/lucasmeijer/agents-in-the-cloud:latest");
   expect(result.output).not.toContain(":beta");
-});
-
-test("a checkout and ambient owner variables do not redirect a public install", () => {
-  const result = run({ ghcrOwner: "explicit", githubOwner: "actions-owner", originUrl: "https://x-access-token:ghp_secret@github.com/oerd/AgentsInTheCloud.git" });
-  expect(result.status).toBe(0);
-  expect(result.output).toContain("DOCKER pull ghcr.io/lucasmeijer/agents-in-the-cloud-system:latest");
-  expect(result.output).toContain("--app-image ghcr.io/lucasmeijer/agents-in-the-cloud:latest");
-  expect(result.output).not.toContain("ghp_secret");
-});
-
-test("explicit repositories support fork and nested image names", () => {
-  const result = run({ ghcrOwner: "invalid_owner", originUrl: "ssh://git@github.com/elsewhere/repository.git" }, [
-    "--system-image", "ghcr.io/oerd/team/system:latest",
-    "--app-image", "ghcr.io/oerd/team/agents-in-the-cloud-dev:latest",
-  ]);
-  expect(result.status).toBe(0);
-  expect(result.output).toContain("DOCKER pull ghcr.io/oerd/team/system:latest");
-  expect(result.output).toContain("--app-image ghcr.io/oerd/team/agents-in-the-cloud-dev:latest");
-});
-
-test("updating without an explicit System image preserves the installed repository", () => {
-  const result = run({ installed: true, ghcrOwner: "elsewhere", originUrl: "https://github.com/elsewhere/repository.git", installedSystemImage: "ghcr.io/oerd/agents-in-the-cloud-system:latest" });
-  expect(result.status).toBe(0);
-  expect(result.output).toContain("DOCKER pull ghcr.io/oerd/agents-in-the-cloud-system:latest");
-  expect(result.output).not.toContain("DOCKER pull ghcr.io/lucasmeijer/agents-in-the-cloud-system:latest");
-});
-
-test("updating a fork installation follows its Update channel in the installed repository", () => {
-  for (const installedSystemImage of ["ghcr.io/oerd/agents-in-the-cloud-system:latest", `ghcr.io/oerd/agents-in-the-cloud-system@sha256:${"4".repeat(64)}`]) {
-    const result = run({ installed: true, channel: "stable", installedSystemImage });
-    expect(result.status).toBe(0);
-    expect(result.output).toContain("DOCKER pull ghcr.io/oerd/agents-in-the-cloud-system:stable");
-  }
-});
-
-test("help is available even with an invalid ambient owner", () => {
-  const result = run({ ghcrOwner: "my_org" }, ["--help"]);
-  expect(result.status).toBe(0);
-  expect(result.output).toContain("Fork installations should pass both");
 });
 
 test("legacy installation storage remaining after container removal still delegates to Atelier cleanup", () => {

@@ -6,7 +6,7 @@ Build the AgentsInTheCloud app and its matching default workspace image:
 bun run image:build
 ```
 
-By default the script builds `ghcr.io/lucasmeijer/agents-in-the-cloud:<git-description>` and `ghcr.io/lucasmeijer/agents-in-the-cloud:latest` from `apps/web/Dockerfile` and embeds the current git commit in `ATELIER_COMMIT_ID`. Fork publishers must select their complete repository with `--image`; the paired workspace repository follows that app repository. The default workspace image uses a deterministic content tag, so the build reuses it when that tag already exists locally (or in the registry during `image:publish`). Pass `--workspace` to force rebuilding that image.
+By default the script builds `ghcr.io/lucasmeijer/agents-in-the-cloud:<git-description>` and `ghcr.io/lucasmeijer/agents-in-the-cloud:latest` from `apps/web/Dockerfile` and embeds the current git commit in `ATELIER_COMMIT_ID`. The default workspace image uses a deterministic content tag, so the build reuses it when that tag already exists locally (or in the registry during `image:publish`). Pass `--workspace` to force rebuilding that image.
 
 Useful options:
 
@@ -34,7 +34,7 @@ pipeline with channel promotion disabled:
 git switch docker-rewrite
 git pull --ff-only
 bun run check
-bun run image:publish -- --image ghcr.io/example/agents-in-the-cloud --tag docker-rewrite --tag "sha-$(git rev-parse HEAD)" --no-latest --progress plain
+bun run image:publish -- --tag docker-rewrite --tag "sha-$(git rev-parse HEAD)" --no-latest --progress plain
 ```
 
 This builds/publishes **both complete images**, for amd64 and arm64, and bakes the
@@ -56,7 +56,7 @@ website endpoint serves the installer published from `main`, not this branch.
 ```sh
 commit='<full-commit-sha>'
 curl -fsSL "https://raw.githubusercontent.com/lucasmeijer/atelier/$commit/scripts/install.sh" -o /root/install-agents-in-the-cloud.sh
-sudo bash /root/install-agents-in-the-cloud.sh --app-image "ghcr.io/lucasmeijer/agents-in-the-cloud:sha-$commit"
+sudo bash /root/install-agents-in-the-cloud.sh --image "ghcr.io/lucasmeijer/agents-in-the-cloud:sha-$commit"
 ```
 
 The installer replaces its existing `agents-in-the-cloud` container and configures Tailscale

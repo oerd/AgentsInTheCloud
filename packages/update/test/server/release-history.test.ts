@@ -1,8 +1,6 @@
 import { expect, test } from "bun:test";
 import { fetchReleaseHistory, parseReleaseBody, releaseBody, type ReleaseRecord } from "../../src/server/release-history.ts";
 
-const appRepository = "ghcr.io/lucasmeijer/agents-in-the-cloud";
-
 const sha = (n: number) => n.toString(16).padStart(40, "0");
 const record = (n: number): ReleaseRecord => ({ id: `2026-08-${String(n).padStart(2, "0")}-improvements`, revision: sha(n), digest: `sha256:${"a".repeat(64)}`, notesPath: `release_notes/2026-08-${String(n).padStart(2, "0")}-improvements.md` });
 function entry(n: number) {
@@ -26,13 +24,13 @@ test("publication metadata round trips without showing its marker in notes", () 
 });
 
 test("six missed releases are shown newest first, excluding installed and future releases", async () => {
-  const history = await fetchReleaseHistory(appRepository, sha(1), sha(7), fetcher(Array.from({ length: 8 }, (_, i) => entry(i + 1))));
+  const history = await fetchReleaseHistory(sha(1), sha(7), fetcher(Array.from({ length: 8 }, (_, i) => entry(i + 1))));
   expect(history.releases.map(release => release.revision)).toEqual([7, 6, 5, 4, 3, 2].map(sha));
   expect(history.targetHasNotes).toBe(true);
 });
 
 test("latest shows only crossed stable milestones, never drafts or prereleases", async () => {
-  const history = await fetchReleaseHistory(appRepository, sha(3), sha(8), fetcher([entry(2), entry(4), { ...entry(5), draft: true }, { ...entry(6), prerelease: true }, entry(7)]));
+  const history = await fetchReleaseHistory(sha(3), sha(8), fetcher([entry(2), entry(4), { ...entry(5), draft: true }, { ...entry(6), prerelease: true }, entry(7)]));
   expect(history.releases.map(release => release.revision)).toEqual([sha(7), sha(4)]);
   expect(history.targetHasNotes).toBe(false);
   expect(history.compareUrl).toEndWith(`${sha(3)}...${sha(8)}`);
@@ -41,7 +39,7 @@ test("latest shows only crossed stable milestones, never drafts or prereleases",
 test("history paginates rather than silently losing older notes", async () => {
   let pages = 0;
   const base = fetcher([entry(2)]);
-  const history = await fetchReleaseHistory(appRepository, sha(1), sha(2), async (url) => {
+  const history = await fetchReleaseHistory(sha(1), sha(2), async (url) => {
     if (new URL(url).pathname.endsWith("/releases") && ++pages === 1) return Response.json(Array.from({ length: 100 }, () => ({ ...entry(3), tag_name: "unrelated" })));
     if (new URL(url).pathname.endsWith("/releases")) return Response.json([entry(2)]);
     return base(url);
@@ -53,7 +51,7 @@ test("history paginates rather than silently losing older notes", async () => {
 test("commit comparison paginates beyond GitHub's default 250-commit window", async () => {
   const published = { ...entry(2), body: releaseBody({ ...record(2), revision: sha(301) }, "# Last milestone") };
   const pages: number[] = [];
-  const history = await fetchReleaseHistory(appRepository, sha(1), sha(301), async input => {
+  const history = await fetchReleaseHistory(sha(1), sha(301), async input => {
     const url = new URL(input);
     if (url.pathname.endsWith("/releases")) return Response.json([published]);
     const page = Number(url.searchParams.get("page"));
@@ -66,16 +64,8 @@ test("commit comparison paginates beyond GitHub's default 250-commit window", as
 });
 
 test("downgrades, divergent histories, bad revisions, and external failures are explicit", async () => {
-  await expect(fetchReleaseHistory(appRepository, sha(7), sha(1), fetcher([]))).rejects.toThrow("not newer");
-  await expect(fetchReleaseHistory(appRepository, sha(1), sha(7), async () => Response.json({ status: "diverged", commits: [] }))).rejects.toThrow("not newer");
-  await expect(fetchReleaseHistory(appRepository, "invalid", sha(7), fetcher([]))).rejects.toThrow();
-  await expect(fetchReleaseHistory(appRepository, sha(1), sha(7), async () => new Response("", { status: 403 }))).rejects.toThrow("GitHub 403");
-});
-
-test("a fork reads release history from its own repository", async () => {
-  const requested: string[] = [];
-  const fork = fetcher([entry(2)]);
-  const history = await fetchReleaseHistory("ghcr.io/oerd/agents-in-the-cloud", sha(1), sha(2), async (input) => { requested.push(String(input)); return fork(input); });
-  expect(requested.every((url) => url.startsWith("https://api.github.com/repos/oerd/AgentsInTheCloud/"))).toBe(true);
-  expect(history.compareUrl).toBe(`https://github.com/oerd/AgentsInTheCloud/compare/${sha(1)}...${sha(2)}`);
+  await expect(fetchReleaseHistory(sha(7), sha(1), fetcher([]))).rejects.toThrow("not newer");
+  await expect(fetchReleaseHistory(sha(1), sha(7), async () => Response.json({ status: "diverged", commits: [] }))).rejects.toThrow("not newer");
+  await expect(fetchReleaseHistory("invalid", sha(7), fetcher([]))).rejects.toThrow();
+  await expect(fetchReleaseHistory(sha(1), sha(7), async () => new Response("", { status: 403 }))).rejects.toThrow("GitHub 403");
 });

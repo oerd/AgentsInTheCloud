@@ -66,6 +66,7 @@ html:not(.software-keyboard-visible) .composer:not(.composer-has-text) .composer
   .composer-input { font-size: 16px; }
   /* Tight enough for the column to fit under the 40% max on a phone (4 × 62.5px + 10px). */
   .composer-buttons { --composer-control-inset: 4px; gap: 2px; padding-block: 2px; }
+  .composer-prompt-template-buttons { padding-bottom: 2px; }
 }
 
 /* The floating stack sits at the bottom right of the transcript or terminal.

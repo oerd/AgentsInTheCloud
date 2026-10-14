@@ -8,6 +8,7 @@ import type { ImageMetadata } from "../../src/server/registry.ts";
 import { readStoredUpdateChannel, writeStoredUpdateChannel } from "../../src/server/settings-store.ts";
 import { readSystemVersion, requestSupervisorUpdate } from "../../src/server/supervisor.ts";
 import { requiredSystemVersion } from "@agents-in-the-cloud/shared/system-version";
+import { appRepository } from "@agents-in-the-cloud/shared/publishing";
 
 function context() {
   const sidebar: string[] = [];
@@ -47,17 +48,22 @@ function deferred<T = void>() {
 const oldDigest = `sha256:${"a".repeat(64)}`;
 const newDigest = `sha256:${"b".repeat(64)}`;
 const newerDigest = `sha256:${"c".repeat(64)}`;
-const repository = "ghcr.io/oerd/team/agents-in-the-cloud-dev";
-const exact = `${repository}@${newDigest}`;
+const exact = `${appRepository}@${newDigest}`;
 function manager(extra: UpdateManagerDeps = {}) {
   return new UpdateManager({
-    detectRuntime: async () => ({ repository, currentDigest: oldDigest }),
+    detectRuntime: async () => ({ currentDigest: oldDigest }),
     fetchMetadata: async () => ({ digest: newDigest, requiredSystemVersion: 0 }),
     prepareUpdate: async (reference) => ({ reference, imageId: "sha256:prepared-image-id" }),
     readSystemVersion: async () => requiredSystemVersion,
     setInterval: noInterval, ...extra,
   });
 }
+test("System-managed apps record their repositories for installer updates; others don't", async () => {
+  let recorded = 0;
+  await manager({ writeRepositories: async () => { recorded += 1; } }).initialize(context().ctx);
+  await manager({ detectRuntime: async () => undefined, writeRepositories: async () => { recorded += 1; } }).initialize(context().ctx);
+  expect(recorded).toBe(1);
+});
 test("non-System installations neither discover updates nor accept update operations", async () => {
   const instance = manager({ detectRuntime: async () => undefined, fetchMetadata: async () => { throw new Error("must not check"); } });
   await instance.initialize(context().ctx);
@@ -207,7 +213,7 @@ test("channel changes persist, discard prior prepared images, and survive manage
 test("a superseded channel check cannot publish success or failure", async () => {
   for (const fail of [false, true]) {
     const pending = deferred<ImageMetadata>();
-    const instance = manager({ readChannel: async () => "stable", fetchMetadata: async (_repository, channel) => channel === "latest" ? pending.promise : { digest: newDigest, requiredSystemVersion: 0 } });
+    const instance = manager({ readChannel: async () => "stable", fetchMetadata: async (channel) => channel === "latest" ? pending.promise : { digest: newDigest, requiredSystemVersion: 0 } });
     await instance.initialize(context().ctx);
     const stale = instance.setUpdateChannel("latest");
     await Bun.sleep(0);
@@ -233,7 +239,7 @@ test("new installations discover latest updates and pin their immutable image", 
   const prepared: string[] = [];
   const instance = manager({
     readChannel: async () => undefined,
-    fetchMetadata: async (selectedRepository, channel) => { expect(selectedRepository).toBe(repository); channels.push(channel); return { digest: newDigest, requiredSystemVersion: 0 }; },
+    fetchMetadata: async (channel) => { channels.push(channel); return { digest: newDigest, requiredSystemVersion: 0 }; },
     prepareUpdate: async (reference) => { prepared.push(reference); return { reference, imageId: "sha256:latest-image" }; },
   });
   expect(instance.snapshot().updateChannel).toBe("latest");
@@ -249,7 +255,7 @@ test.each(["stable", "latest"] as const)("stored %s channel overrides the latest
   const channels: string[] = [];
   const instance = manager({
     readChannel: async () => channel,
-    fetchMetadata: async (_repository, selected) => { channels.push(selected); return { digest: newDigest, requiredSystemVersion: 0 }; },
+    fetchMetadata: async (selected) => { channels.push(selected); return { digest: newDigest, requiredSystemVersion: 0 }; },
   });
   await instance.initialize(context().ctx);
   expect(instance.snapshot().updateChannel).toBe(channel);
@@ -266,7 +272,7 @@ test("switching from stable to latest persists the channel and refreshes the tar
     const dependencies = {
       readChannel: readStoredUpdateChannel,
       writeChannel: writeStoredUpdateChannel,
-      fetchMetadata: async (_repository: string, channel: "stable" | "latest") => {
+      fetchMetadata: async (channel: "stable" | "latest") => {
         channels.push(channel);
         return { digest: channel === "latest" ? newerDigest : newDigest, requiredSystemVersion: 0 };
       },

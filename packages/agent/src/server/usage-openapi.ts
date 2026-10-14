@@ -20,6 +20,7 @@ const providerUsageSchema = {
       plan: { type: ["string", "null"], description: "Null when the provider does not report the subscription plan." }, checkedAt: { type: "string", format: "date-time" }, allowed: { type: ["boolean", "null"] }, limitReached: { type: ["boolean", "null"] },
       credits: { type: "object", properties: { unlimited: { type: "boolean" }, balance: { type: ["string", "null"], description: "Provider-reported units, not dollars." } } },
       resets: { type: "object", properties: { available: { type: "integer", minimum: 0 } } },
+      details: { type: "array", description: "Short labelled facts that don't fit a window, like unlimited allowances or exact counts.", items: { type: "object", properties: { label: { type: "string" }, value: { type: "string" } } } },
       windows: { type: "array", items: reportedUsageWindowSchema },
     } },
     windows: { type: "array", items: { type: "object", properties: {
@@ -39,7 +40,7 @@ export const usageOpenApiPaths = {
   "/usage": { get: {
     summary: "Inspect all connected, supported providers",
     parameters: [refreshParameter],
-    description: "JSON only; in the app, usage shows on each provider in the Models dialog (`GET /models`). Includes provider-reported subscription windows and pacing. Supports OpenAI Codex and Anthropic subscriptions. Anthropic requires OAuth sign-in, not an API key; its main limits come from Claude Code responses through the workspace proxy. AgentsInTheCloud asks Anthropic with a one-token message to its cheapest model only on the first read after start or a credential change, after a window resets, and on refresh. Provider failures are explicit per-provider errors.",
+    description: "JSON only; in the app, usage shows on each provider in the Models dialog (`GET /models`). Includes provider-reported subscription windows and pacing. Supports OpenAI Codex, Anthropic, xAI, Radius and GitHub Copilot subscriptions. Anthropic requires OAuth sign-in, not an API key; its main limits come from Claude Code responses through the workspace proxy. AgentsInTheCloud asks Anthropic with a one-token message to its cheapest model only on the first read after start or a credential change, after a window resets, and on refresh. Provider failures are explicit per-provider errors.",
     responses: jsonResponse("Usage overview", { type: "object", properties: { providers: { type: "array", items: providerUsageSchema } } }),
   } },
   "/usage/button": { get: { summary: "Usage button perimeter for the most urgent recently used subscription", responses: htmlSurfaceResponses("Server-rendered button frame; it opens the Models dialog with that provider expanded. Among subscriptions used in the 30 minutes ending at the last recorded inference, shows the active allowance projected to reach 100% soonest before its next reset, at its average consumption rate since the window began. Projections stop at the next reset; limits that will not fill before then have no projected hit before reset. Ties prefer higher usage. Green is Time beyond Usage; red is Usage beyond Time. No ring without recorded activity or an active reported limit.") } },

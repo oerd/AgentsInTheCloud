@@ -4,8 +4,8 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { detectSelfUpdateRuntime, prepareUpdate, pruneUnusedAgentsInTheCloudImages, pullImageReference, type DockerImage, type PullProgress, type PullLayerProgress } from "../../src/server/docker.ts";
+import { appRepository } from "@agents-in-the-cloud/shared/publishing";
 
-const appRepository = "ghcr.io/oerd/team/agents-in-the-cloud-dev";
 const app = `${appRepository}@sha256:${"a".repeat(64)}`;
 const workspace = `ghcr.io/lucasmeijer/workspace@sha256:${"b".repeat(64)}`;
 const appImage: DockerImage = { Id: "sha256:app" };
@@ -78,19 +78,11 @@ test("verification failure never reports ready", async () => {
 test("runtime detection only enables System's app container", async () => {
   for (const managed of [false, true]) {
     const runtime = await detectSelfUpdateRuntime(async (args) => ({ code: 0, stderr: "", stdout: JSON.stringify(args[0] === "inspect"
-      ? [{ Image: "sha256:app", Config: { Labels: { "agents-in-the-cloud.role": managed ? "app" : "workspace", "agents-in-the-cloud.app-repository": appRepository } } }]
+      ? [{ Image: "sha256:app", Config: { Labels: { "agents-in-the-cloud.role": managed ? "app" : "workspace" } } }]
       : [{ Id: "sha256:app", RepoDigests: [app], Config: { Labels: { "org.opencontainers.image.revision": "revision" } } }]) }), async () => "container");
-    if (managed) expect(runtime).toEqual({ repository: appRepository, currentRevision: "revision", currentDigest: app.split("@")[1] });
+    if (managed) expect(runtime).toEqual({ currentRevision: "revision", currentDigest: app.split("@")[1] });
     else expect(runtime).toBeUndefined();
   }
-});
-test("apps started by older System supervisors retain upstream self-updates", async () => {
-  const repository = "ghcr.io/lucasmeijer/agents-in-the-cloud";
-  const digest = `sha256:${"e".repeat(64)}`;
-  const runtime = await detectSelfUpdateRuntime(async (args) => ({ code: 0, stderr: "", stdout: JSON.stringify(args[0] === "inspect"
-    ? [{ Image: "sha256:app", Config: { Labels: { "agents-in-the-cloud.role": "app" } } }]
-    : [{ Id: "sha256:app", RepoDigests: [`${repository}@${digest}`], Config: { Labels: { "org.opencontainers.image.revision": "revision" } } }]) }), async () => "container");
-  expect(runtime).toEqual({ repository, currentRevision: "revision", currentDigest: digest });
 });
 test("Docker pull stream handles progress, exact references and embedded errors without uncaught exceptions", async () => {
   const directory = await mkdtemp(join(tmpdir(), "agents-in-the-cloud-pull-"));

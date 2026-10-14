@@ -88,7 +88,7 @@ function renderUsageLimits({ reported, error, windows }: ProviderUsageOverview):
   if (error) return `<div class="usage-unavailable" role="status"><p>Couldn’t check usage limits. This only affects the usage shown here; models may still work fine.</p><p class="usage-caption">${escapeHtml(error)}</p></div>`;
   if (!reported) return "<p>Disconnected.</p>";
   const { used, unused } = shownUsageWindows(windows);
-  return `${reported.limitReached || reported.allowed === false ? '<p class="usage-error" role="status">Subscription limit reached.</p>' : ""}${used.map(renderUsageWindow).join("")}${unused.length ? disclosureHtml({ summary: { kind: "compact", label: { kind: "text", text: `Unused limits (${unused.length})` } }, open: !used.length, bodyHtml: `<div class="usage-section">${unused.map(renderUsageWindow).join("")}</div>` }) : ""}${used.length || unused.length || reported.balance ? "" : '<p>No limits reported.</p>'}`;
+  return `${reported.limitReached || reported.allowed === false ? '<p class="usage-error" role="status">Subscription limit reached.</p>' : ""}${used.map(renderUsageWindow).join("")}${unused.length ? disclosureHtml({ summary: { kind: "compact", label: { kind: "text", text: `Unused limits (${unused.length})` } }, open: !used.length, bodyHtml: `<div class="usage-section">${unused.map(renderUsageWindow).join("")}</div>` }) : ""}${used.length || unused.length || reported.balance || reported.details?.length ? "" : '<p>No limits reported.</p>'}`;
 }
 
 function money(amount: number, currency: string): string {
@@ -97,11 +97,12 @@ function money(amount: number, currency: string): string {
 
 function renderUsageAccount({ reported, error }: ProviderUsageOverview): string {
   if (!reported || error) return "";
-  const { credits, resets, balance } = reported;
+  const { credits, resets, balance, details } = reported;
   const rows: string[] = [];
   if (balance) rows.push(`<div class="usage-limit-heading"><dt>Available credit</dt><dd><strong>${money(balance.available, balance.currency)}</strong></dd></div>`, `<div class="usage-limit-heading"><dt>Spent this month</dt><dd><strong>${money(balance.monthSpend, balance.currency)}</strong></dd></div>`);
   if (resets) rows.push(`<div class="usage-limit-heading"><dt>Available resets</dt><dd><strong>${number(resets.available)}</strong></dd></div>`);
   if (credits) rows.push(`<div class="usage-limit-heading"><dt>Credit balance</dt><dd><strong>${credits.unlimited ? "Unlimited" : credits.balance !== null ? Number(credits.balance).toLocaleString("en-US", { maximumFractionDigits: 0 }) : "Not reported"}</strong></dd></div>`);
+  for (const { label, value } of details ?? []) rows.push(`<div class="usage-limit-heading"><dt>${escapeHtml(label)}</dt><dd><strong>${escapeHtml(value)}</strong></dd></div>`);
   if (!rows.length) return "";
   return `<article class="usage-limit"><h3>${balance ? "Credits" : "Account allowance"}</h3><dl class="usage-account">${rows.join("")}</dl></article>`;
 }

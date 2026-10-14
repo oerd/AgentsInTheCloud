@@ -7,7 +7,6 @@
   },
   "dependencies": {
     "@agents-in-the-cloud/agent": "workspace:*",
-    "@agents-in-the-cloud/builtin-agent": "workspace:*",
     "@agents-in-the-cloud/cli-agent": "workspace:*",
     "@agents-in-the-cloud/core": "workspace:*",
     "@agents-in-the-cloud/llm": "workspace:*",

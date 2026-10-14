@@ -9,6 +9,7 @@ import { createPiModelRuntime, modelsDialogId, popularProviderIds, setEnabledMod
 import { invalidArguments } from "@agents-in-the-cloud/core";
 import { cloudForges } from "@agents-in-the-cloud/core/cloud-forges";
 import { errorMessage, escapeHtml, providerBadgeHtml } from "@agents-in-the-cloud/shared";
+import { githubRepository } from "@agents-in-the-cloud/shared/publishing";
 import { clearForgeAccounts } from "@agents-in-the-cloud/proxy-egress";
 import { agentsInTheCloudUrl } from "@agents-in-the-cloud/proxy-ingress";
 import { clearCommitIdentity, getStoredCommitIdentity, setCommitIdentity } from "@agents-in-the-cloud/workspace-templates";
@@ -41,7 +42,7 @@ async function renderCommitIdentitySettings(): Promise<string> {
 function renderBuildIdentity(): string {
   const commit = process.env.ATELIER_COMMIT_ID;
   if (!commit) return `<span class="settings-build-identity">Local development build</span>`;
-  const commitUrl = `https://github.com/lucasmeijer/atelier/commit/${encodeURIComponent(commit)}`;
+  const commitUrl = `https://github.com/${githubRepository}/commit/${encodeURIComponent(commit)}`;
   return `<a class="settings-build-identity" href="${commitUrl}" target="_blank" rel="noreferrer">${escapeHtml(commit.slice(0, 7))}</a>`;
 }
 
